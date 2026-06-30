@@ -40,13 +40,17 @@ EMIT_SCOUT_TOOL = {
             "position_body": {"type": "string", "description": "⑧ポジション魅力の本文"},
             "subject_resend": {
                 "type": "string",
-                "description": "再送件名。初回と異なる切り口。【Premium Offer】で始める。",
+                "description": (
+                    "再送件名。必ず「【どうしても諦めきれず２度目のご連絡です。】」で始め、"
+                    "その後に熱意の伝わる一文を続ける。"
+                ),
             },
             "resend_body": {
                 "type": "string",
                 "description": (
-                    "再送本文。初回の約1/2の分量。冒頭で再送に自然に触れ、初回と異なる訴求。"
-                    "共通点コンサルタントには数を絞って言及。署名・フッターは含めない。"
+                    "再送本文。初回の約1/2の分量で、熱意を前面に出す。冒頭で再送に自然に触れ、"
+                    "初回と異なる切り口で訴求。共通点コンサルタントには数を絞って言及。"
+                    "署名・フッターは含めない（システムが付与）。"
                 ),
             },
         },
@@ -190,10 +194,16 @@ def _render_resend_rules(rules: dict) -> str:
     cfg = rules.get("resend", {})
     ratio = cfg.get("length_ratio", 0.5)
     max_mentions = cfg.get("max_consultant_mentions", 1)
+    prefix = (
+        rules.get("constraints", {})
+        .get("resend_subject_prefix", "【どうしても諦めきれず２度目のご連絡です。】")
+    )
     pct = int(round(ratio * 100))
     return (
         "# 再送本文の制約\n"
-        f"- 再送本文(resend_body)は初回本文(④〜⑧の合計)の約{pct}%の分量に収めること。\n"
+        f"- 再送件名(subject_resend)は必ず「{prefix}」で始めること。\n"
+        f"- 再送本文(resend_body)は初回本文(④〜⑧の合計)の約{pct}%の分量に収め、熱意を前面に出すこと。\n"
         f"- 共通点コンサルタントへの言及は再送では最大{max_mentions}名までに絞ること。\n"
-        "- 冒頭で再送であることに自然に触れ、初回とは異なる切り口・訴求にすること。"
+        "- 冒頭で再送であることに自然に触れ、初回とは異なる切り口・訴求にすること。\n"
+        "- 再送にフッター(⑫)は付かない（システムが署名までで止める）。"
     )

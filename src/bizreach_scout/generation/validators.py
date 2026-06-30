@@ -25,16 +25,22 @@ _EMOJI_RE = re.compile(
 _URL_RE = re.compile(r"https?://[^\s　、。」』）)】]+")
 
 
-def validate_subject(subject: str, rules: dict | None = None) -> list[str]:
+def subject_prefix_for(kind: str, cfg: dict) -> str:
+    if kind == "resend":
+        return cfg.get("resend_subject_prefix", "【どうしても諦めきれず２度目のご連絡です。】")
+    return cfg.get("subject_prefix", "【Premium Offer】")
+
+
+def validate_subject(subject: str, rules: dict | None = None, kind: str = "first") -> list[str]:
     cfg = (rules or scout_rules()).get("constraints", {})
     issues: list[str] = []
-    prefix = cfg.get("subject_prefix", "【Premium Offer】")
+    prefix = subject_prefix_for(kind, cfg)
     if not subject.startswith(prefix):
         issues.append(f"件名が「{prefix}」で始まっていません")
-    # 【】は Premium Offer のみ。先頭の prefix を除いた残りに【】が無いこと。
+    # 【】は接頭辞のみ。先頭の prefix を除いた残りに【】が無いこと。
     rest = subject[len(prefix):] if subject.startswith(prefix) else subject
     if "【" in rest or "】" in rest:
-        issues.append("件名の【】は Premium Offer 以外に使用されています")
+        issues.append("件名の【】は所定の接頭辞以外に使用されています")
     return issues
 
 
@@ -68,5 +74,7 @@ def validate_body(body: str, rules: dict | None = None) -> list[str]:
     return issues
 
 
-def validate_scout(subject: str, body: str, rules: dict | None = None) -> list[str]:
-    return validate_subject(subject, rules) + validate_body(body, rules)
+def validate_scout(
+    subject: str, body: str, rules: dict | None = None, kind: str = "first"
+) -> list[str]:
+    return validate_subject(subject, rules, kind) + validate_body(body, rules)

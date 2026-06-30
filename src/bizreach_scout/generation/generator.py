@@ -20,8 +20,10 @@ _USER_INSTRUCTION = (
 )
 
 
-def _normalize_subject(subject: str, rules: dict) -> str:
-    prefix = rules.get("constraints", {}).get("subject_prefix", "【Premium Offer】")
+def _normalize_subject(subject: str, rules: dict, kind: str = "first") -> str:
+    from .validators import subject_prefix_for
+
+    prefix = subject_prefix_for(kind, rules.get("constraints", {}))
     s = subject.strip()
     if s.startswith(prefix):
         return s
@@ -140,11 +142,11 @@ class ScoutGenerator:
         resend_body = assemble_resend_body(candidate.member_no, data["resend_body"], company)
 
         first = ScoutContent(
-            subject=_normalize_subject(data["subject_first"], rules),
+            subject=_normalize_subject(data["subject_first"], rules, "first"),
             body=first_body,
         )
         resend = ScoutContent(
-            subject=_normalize_subject(data["subject_resend"], rules),
+            subject=_normalize_subject(data["subject_resend"], rules, "resend"),
             body=resend_body,
         )
         return GeneratedScout(
@@ -160,8 +162,8 @@ class ScoutGenerator:
 
     @staticmethod
     def _collect_issues(scout: GeneratedScout, rules: dict) -> list[str]:
-        issues = validate_scout(scout.first.subject, scout.first.body, rules)
-        issues += validate_scout(scout.resend.subject, scout.resend.body, rules)
+        issues = validate_scout(scout.first.subject, scout.first.body, rules, "first")
+        issues += validate_scout(scout.resend.subject, scout.resend.body, rules, "resend")
         return issues
 
 

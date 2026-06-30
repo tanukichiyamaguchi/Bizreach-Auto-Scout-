@@ -15,6 +15,14 @@ def test_subject_rejects_extra_brackets():
     assert any("【】" in i for i in issues)
 
 
+def test_resend_subject_requires_its_own_prefix():
+    ok = "【どうしても諦めきれず２度目のご連絡です。】貴殿に改めてご連絡しました"
+    assert validate_subject(ok, kind="resend") == []
+    # 初回の接頭辞では再送として不正
+    issues = validate_subject("【Premium Offer】X", kind="resend")
+    assert any("で始まっていません" in i for i in issues)
+
+
 def test_body_rejects_kagikakko():
     issues = validate_body("これは「テスト」です。")
     assert any("「" in i or "禁止" in i for i in issues)

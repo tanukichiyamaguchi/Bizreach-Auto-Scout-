@@ -68,6 +68,8 @@ resend:
 # --- 文面の固定ルール（バリデーションに使用）--------------------------------
 constraints:
   subject_prefix: "【Premium Offer】"
+  # 再送の件名接頭辞（再送はこの定型で始める。初回の Premium Offer とは別）。
+  resend_subject_prefix: "【どうしても諦めきれず２度目のご連絡です。】"
   forbid_strings: ["――", "「", "」"]   # 装飾的ダッシュ・カギ括弧の禁止
   max_exclamations: 2                    # 感嘆符は最大2回
   forbid_emoji: true

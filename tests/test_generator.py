@@ -19,8 +19,8 @@ VALID_INPUT = {
     "career_body": "2年目で年収990万円、7年目で2,000万円というモデルもございます。",
     "position_title": "このポジションの魅力",
     "position_body": "経営全般に深く関与し、クライアントの成果に長期で伴走できます。",
-    "subject_resend": "【Premium Offer】改めて貴殿のマネジメント経験に惹かれご連絡しました",
-    "resend_body": "先日ご連絡いたしました件、改めてご案内です。貴殿の組織づくりの経験は当社で必ず活きます。",
+    "subject_resend": "【どうしても諦めきれず２度目のご連絡です。】貴殿の組織づくりの経験をどうしても当社で活かしたく",
+    "resend_body": "先日ご連絡いたしました件、どうしても諦めきれず改めてご連絡しました。貴殿の組織づくりの経験は当社で必ず活きると確信しております。",
 }
 
 
@@ -36,12 +36,13 @@ def test_generate_produces_two_messages():
     scout = gen.generate(make_candidate())
 
     assert scout.first.subject.startswith("【Premium Offer】")
-    assert scout.resend.subject.startswith("【Premium Offer】")
+    assert scout.resend.subject.startswith("【どうしても諦めきれず２度目のご連絡です。】")
     # 初回本文に固定要素が含まれる
     assert "BU3765516様" in scout.first.body
     assert "このスカウトのポイント" in scout.first.body
-    # 再送本文にも固定フッターが含まれる
-    assert "弊社について" in scout.resend.body
+    # 再送本文は署名まで（フッターなし）、フルネーム署名
+    assert "岩渕龍正" in scout.resend.body
+    assert "弊社について" not in scout.resend.body
     assert scout.model == "test-model"
     assert scout.tone_key == "early30s"
 

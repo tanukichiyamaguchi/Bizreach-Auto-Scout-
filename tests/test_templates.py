@@ -43,15 +43,15 @@ def test_header_has_no_linebreak_between_marker_and_member_no():
 def test_signature_from_company_config():
     sig = build_signature(company_config())
     assert "経営戦略研究所株式会社" in sig
-    assert "岩渕" in sig
+    assert "岩渕龍正" in sig  # フルネーム
 
 
-def test_footer_identical_for_first_and_resend():
+def test_footer_in_first_but_not_resend():
     footer = build_footer(company_config())
     first = assemble_first_body("BU1", _sections(), company_config())
     resend = assemble_resend_body("BU1", "先日はご連絡しました。改めてご案内です。", company_config())
     assert footer in first
-    assert footer in resend
+    assert footer not in resend  # 再送にフッターは付けない
 
 
 def test_no_forbidden_kagikakko_in_assembled_body():
@@ -61,8 +61,9 @@ def test_no_forbidden_kagikakko_in_assembled_body():
     assert "」" not in body
 
 
-def test_resend_body_includes_header_and_footer():
+def test_resend_body_has_header_and_signature_no_footer():
     resend = assemble_resend_body("BU9", "再度のご連絡です。", company_config())
     assert "BU9様" in resend
-    assert "弊社について" in resend
     assert build_signature(company_config()) in resend
+    assert "このスカウトのポイント" not in resend  # フッターなし
+    assert "弊社について" not in resend

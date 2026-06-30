@@ -112,13 +112,12 @@ def assemble_first_body(member_no: str, sec: FirstSections, company_cfg: dict) -
 
 
 def assemble_resend_body(member_no: str, resend_core: str, company_cfg: dict) -> str:
-    """再送本文を組み立てる。モデル生成の本文(冒頭で再送に触れる)＋定型尾部。"""
+    """再送本文を組み立てる。初回より短く、熱意を前面に。フッター(⑫)は付けない。"""
     parts = [
         _header(member_no),
         resend_core.strip(),
         CASUAL_MEETING,
         TAP_GUIDE,
         build_signature(company_cfg),
-        build_footer(company_cfg),
     ]
     return "\n\n".join(p for p in parts if p)
