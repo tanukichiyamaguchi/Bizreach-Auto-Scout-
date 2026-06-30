@@ -1,0 +1,258 @@
+{
+  "_note": "consultant_profiles_v2.docx（歯科医院地域一番実践会 コンサルタント紹介一覧, 出典 https://www.consuldent.jp/members.html）より作成。共通点マッチング用に各コンサルタントの前職・業界・出身大学・職種・得意領域・紹介URL・タグを抽出。",
+  "consultants": [
+    {
+      "id": "iwabuchi",
+      "display_name": "岩渕 龍正（代表取締役社長）",
+      "former_companies": ["大手経営コンサルティング会社"],
+      "industries": ["コンサルティング", "経営コンサルティング"],
+      "universities": ["学習院大学"],
+      "roles": ["経営コンサルタント", "代表取締役"],
+      "specialties": ["マーケティング", "歯科医院 地域一番化", "ハンズオンコンサルティング"],
+      "profile_url": "https://www.consuldent.jp/profile.html",
+      "tags": ["founder", "consulting", "marketing", "gakushuin"]
+    },
+    {
+      "id": "yokoyama",
+      "display_name": "横山 光孝（執行役員）",
+      "former_companies": ["業種特化型コンサルティング会社", "サービス業"],
+      "industries": ["コンサルティング", "サービス"],
+      "universities": [],
+      "roles": ["コンサルタント", "中小企業診断士", "サービスマネジメント"],
+      "specialties": ["業績アップ支援", "マネジメント", "マーケティング"],
+      "profile_url": "https://www.consuldent.jp/member/yokoyama",
+      "tags": ["consulting"]
+    },
+    {
+      "id": "hagiwara",
+      "display_name": "萩原 直樹（執行役員・チーフディレクター）",
+      "former_companies": ["大手求人広告会社", "採用コンサルティング会社", "紅茶輸入会社（起業）"],
+      "industries": ["人材", "求人広告", "採用"],
+      "universities": ["神田外語大学"],
+      "roles": ["法人営業", "チーフ", "採用コンサルタント", "起業"],
+      "specialties": ["採用の仕組み化", "組織設計", "営業"],
+      "profile_url": "https://www.consuldent.jp/member/hagiwara",
+      "tags": ["recruit", "hr", "sales", "kanda"]
+    },
+    {
+      "id": "okamoto",
+      "display_name": "岡本 雅史",
+      "former_companies": ["リクルート", "会計保守コンサルティング会社"],
+      "industries": ["人材", "求人", "コンサルティング"],
+      "universities": ["早稲田大学"],
+      "roles": ["求人営業", "チーフ", "業務改善コンサルタント"],
+      "specialties": ["新規事業立ち上げ", "育成", "マーケティング"],
+      "profile_url": "https://www.consuldent.jp/member/okamoto",
+      "tags": ["recruit", "sales", "consulting", "waseda"]
+    },
+    {
+      "id": "watanabe",
+      "display_name": "渡邊 健二",
+      "former_companies": ["リクルート"],
+      "industries": ["人材", "求人", "採用"],
+      "universities": ["早稲田大学"],
+      "roles": ["法人営業", "チーフ", "マネジメント"],
+      "specialties": ["採用成功ノウハウ", "育成", "組織マネジメント"],
+      "profile_url": "https://www.consuldent.jp/member/watanabe",
+      "tags": ["recruit", "sales", "waseda"]
+    },
+    {
+      "id": "sometani",
+      "display_name": "染谷 東希",
+      "former_companies": ["VC・コンサルティング会社", "専門商社"],
+      "industries": ["投資", "金融", "コンサルティング", "M&A"],
+      "universities": ["慶應義塾大学"],
+      "roles": ["投資（VC）", "M&Aコンサルタント", "新規事業"],
+      "specialties": ["資本政策・財務", "M&A", "新規事業立ち上げ", "WEBメディア"],
+      "profile_url": "https://www.consuldent.jp/member/sometani",
+      "tags": ["finance", "ma", "consulting", "keio"]
+    },
+    {
+      "id": "yamamoto",
+      "display_name": "山本 峻士",
+      "former_companies": ["ヤンセン・ファーマ", "プルデンシャル生命保険"],
+      "industries": ["製薬", "医療", "生命保険", "保険"],
+      "universities": ["日本大学"],
+      "roles": ["MR（医薬情報担当）", "ライフプランナー", "営業"],
+      "specialties": ["無形商材営業", "医療従事者向け営業", "顧客信頼構築"],
+      "profile_url": "https://www.consuldent.jp/member/yamamoto",
+      "tags": ["insurance", "prudential", "pharma", "medical", "sales"]
+    },
+    {
+      "id": "yamashita",
+      "display_name": "山下 淳平",
+      "former_companies": ["アパレルメーカー", "リクルート"],
+      "industries": ["アパレル", "小売", "人材", "採用"],
+      "universities": [],
+      "roles": ["店舗運営・責任者", "人事コンサルタント", "リーダー"],
+      "specialties": ["マーケティング", "店舗マネジメント", "キャリア採用支援"],
+      "profile_url": "https://www.consuldent.jp/member/yamashita",
+      "tags": ["recruit", "apparel", "retail", "sales"]
+    },
+    {
+      "id": "yamanouchi",
+      "display_name": "山ノ内 友哉",
+      "former_companies": ["大手食品会社系列の製薬会社"],
+      "industries": ["製薬", "医療"],
+      "universities": ["医療系大学"],
+      "roles": ["MR（医薬情報担当）"],
+      "specialties": ["医療従事者との信頼構築", "課題解決", "シェア拡大"],
+      "profile_url": "https://www.consuldent.jp/member/yamanouchi",
+      "tags": ["pharma", "medical", "mba"]
+    },
+    {
+      "id": "inoue",
+      "display_name": "井ノ上 貴之",
+      "former_companies": ["富士通"],
+      "industries": ["IT", "ソフトウェア"],
+      "universities": ["鹿児島大学", "鹿児島大学大学院"],
+      "roles": ["ソフトウェア開発", "プロジェクトマネジメント"],
+      "specialties": ["海外向け開発", "品質マネジメント", "DX", "ディープラーニング"],
+      "profile_url": "https://www.consuldent.jp/member/inoue",
+      "tags": ["it", "engineering"]
+    },
+    {
+      "id": "nakazawa",
+      "display_name": "中澤 裕太朗",
+      "former_companies": ["飲食業", "コンサルティング会社"],
+      "industries": ["飲食", "外食", "コンサルティング"],
+      "universities": ["関西大学"],
+      "roles": ["店舗責任者", "人材育成コンサルタント", "グループリーダー"],
+      "specialties": ["店舗経営の立て直し", "人材育成", "評価制度", "組織配置"],
+      "profile_url": "https://www.consuldent.jp/member/nakazawa",
+      "tags": ["foodservice", "consulting", "hr"]
+    },
+    {
+      "id": "maeda",
+      "display_name": "前田 雄太郎",
+      "former_companies": ["健康食品メーカー", "製薬メーカー"],
+      "industries": ["健康食品", "製薬", "小売"],
+      "universities": [],
+      "roles": ["取締役", "営業", "研修・教育"],
+      "specialties": ["店舗運営の仕組み化", "営業", "研修・人材育成"],
+      "profile_url": "https://www.consuldent.jp/member/maeda",
+      "tags": ["pharma", "training", "sales"]
+    },
+    {
+      "id": "igarashi",
+      "display_name": "五十嵐 康浩",
+      "former_companies": ["ハウスメーカー", "大手アパレルメーカー", "リクルート", "ITベンチャー"],
+      "industries": ["住宅", "アパレル", "人材", "IT"],
+      "universities": [],
+      "roles": ["施工管理", "店長", "法人営業", "企画"],
+      "specialties": ["店舗黒字化", "人材を通じた業績貢献", "最優秀営業"],
+      "profile_url": "https://www.consuldent.jp/member/igarashi",
+      "tags": ["recruit", "apparel", "housing", "sales", "it"]
+    },
+    {
+      "id": "hirakoso",
+      "display_name": "平社 雄一",
+      "former_companies": ["イベント企画ベンチャー", "東証一部上場企業（イベント部門）"],
+      "industries": ["イベント", "エンタメ", "広告"],
+      "universities": ["神田外語大学"],
+      "roles": ["イベント企画・制作・運営", "リーダー"],
+      "specialties": ["大型イベント制作", "粗利改善", "数値管理・マネジメント"],
+      "profile_url": "https://www.consuldent.jp/member/hirakoso",
+      "tags": ["event", "kanda"]
+    },
+    {
+      "id": "yoshimura",
+      "display_name": "吉村 拓也",
+      "former_companies": ["歯科医院内覧会業者", "輸出業（個人事業）"],
+      "industries": ["歯科", "医療", "集客", "マーケティング"],
+      "universities": ["京都産業大学"],
+      "roles": ["内覧会・集客", "個人事業主"],
+      "specialties": ["歯科開業集患", "立地を問わない集客", "患者心理理解"],
+      "profile_url": "https://www.consuldent.jp/member/yoshimura",
+      "tags": ["dental", "medical", "marketing"]
+    },
+    {
+      "id": "imaizumi",
+      "display_name": "今泉 潤一",
+      "former_companies": ["人材会社", "美容医療特化コンサルティング会社"],
+      "industries": ["人材", "派遣・紹介", "美容医療", "医療"],
+      "universities": [],
+      "roles": ["派遣・紹介営業", "課長", "採用プレイングマネージャー", "部長"],
+      "specialties": ["ダイレクトリクルーティング", "採用計画・実務", "評価・教育"],
+      "profile_url": "https://www.consuldent.jp/member/imaizumi",
+      "tags": ["hr", "recruiting", "medical"]
+    },
+    {
+      "id": "takizawa",
+      "display_name": "滝沢 英之",
+      "former_companies": ["リクルート"],
+      "industries": ["人材", "求人", "採用"],
+      "universities": [],
+      "roles": ["法人営業", "チーフ", "推進リーダー"],
+      "specialties": ["採用ノウハウ", "育成", "組織を動かす推進力"],
+      "profile_url": "https://www.consuldent.jp/member/takizawa",
+      "tags": ["recruit", "sales"]
+    },
+    {
+      "id": "ota",
+      "display_name": "太田 智之",
+      "former_companies": ["大手給食委託会社（医療福祉特化）"],
+      "industries": ["医療", "福祉", "給食・フードサービス"],
+      "universities": ["神戸学院大学"],
+      "roles": ["新規開拓営業", "管理", "マネジメント"],
+      "specialties": ["離職率改善", "解約率改善", "顧客信頼構築"],
+      "profile_url": "https://www.consuldent.jp/member/ota",
+      "tags": ["medical", "foodservice", "sales"]
+    },
+    {
+      "id": "mikkaichi",
+      "display_name": "三日市 柊",
+      "former_companies": ["トヨタ自動車直系の自動車販売会社"],
+      "industries": ["自動車", "小売"],
+      "universities": ["成城大学"],
+      "roles": ["新車販売営業"],
+      "specialties": ["新人賞・年間表彰", "自動車保険成約", "法人営業"],
+      "profile_url": "https://www.consuldent.jp/member/mikkaichi",
+      "tags": ["automotive", "sales"]
+    },
+    {
+      "id": "terao",
+      "display_name": "寺尾 陸",
+      "former_companies": ["工業用ガスメーカー", "アストラゼネカ"],
+      "industries": ["製造", "製薬", "医療"],
+      "universities": ["立命館大学"],
+      "roles": ["営業"],
+      "specialties": ["売上最高記録更新", "全施設採用達成", "無形商材営業"],
+      "profile_url": "https://www.consuldent.jp/member/terao",
+      "tags": ["pharma", "medical", "sales"]
+    },
+    {
+      "id": "yamaguchi",
+      "display_name": "山口 裕介",
+      "former_companies": ["人材系ベンチャー", "大手化粧品メーカー"],
+      "industries": ["人材", "化粧品", "美容", "コンサルティング"],
+      "universities": [],
+      "roles": ["起業", "美容室コンサルティング", "経営戦略部"],
+      "specialties": ["戦略設計", "組織構築", "地域一番化（51店舗）", "伴走支援"],
+      "profile_url": "https://www.consuldent.jp/member/yamaguchi",
+      "tags": ["consulting", "marketing", "strategy", "beauty"]
+    },
+    {
+      "id": "sato",
+      "display_name": "佐藤 洋輔",
+      "former_companies": ["三井系列のハウスメーカー"],
+      "industries": ["住宅", "不動産"],
+      "universities": ["北九州市立大学"],
+      "roles": ["営業"],
+      "specialties": ["ヒアリング型提案", "月間MVP", "高額物件の折衝"],
+      "profile_url": "https://www.consuldent.jp/member/sato",
+      "tags": ["housing", "realestate", "sales"]
+    },
+    {
+      "id": "yokoi",
+      "display_name": "横井 貴（パートナーコンサルタント／公認会計士・税理士）",
+      "former_companies": ["税理士法人エイチ", "株式会社エイチ・フィナンシャルアドバイザリー"],
+      "industries": ["会計", "税務", "金融", "M&A"],
+      "universities": [],
+      "roles": ["公認会計士", "税理士", "M&A・企業再生"],
+      "specialties": ["デューデリジェンス", "事業計画作成", "歯科医院特化の税務"],
+      "profile_url": "https://www.consuldent.jp/member/yokoi",
+      "tags": ["finance", "accounting", "ma", "tax"]
+    }
+  ]
+}

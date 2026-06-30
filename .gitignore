@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets / local config
+.env
+*.local.env
+config/*.secret.*
+# 注: config/consultants.json は members.html の公開情報のためコミット対象。
+
+# Runtime data
+data/*.db
+data/*.sqlite3
+data/exports/
+data/sessions/
+data/state/
+logs/
+*.log
+
+# Playwright auth state
+.auth/
+storage_state.json
+
+# OS
+.DS_Store
+Thumbs.db
