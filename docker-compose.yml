@@ -1,0 +1,41 @@
+# =============================================================
+#  Bizreach Auto Scout — docker compose 定義
+# -------------------------------------------------------------
+#  常駐運用（serve）または定期バッチを Docker で動かすための構成。
+#  まずは .env で BIZSCOUT_DRY_RUN=true のまま検証することを強く推奨。
+# =============================================================
+
+services:
+  bizscout:
+    # カレントディレクトリの Dockerfile からビルド。
+    build: .
+    image: bizreach-auto-scout:latest
+    container_name: bizscout
+
+    # 環境変数は .env から読み込む（.env.example をコピーして作成）。
+    # ANTHROPIC_API_KEY / BIZREACH_EMAIL / BIZREACH_PASSWORD / BIZSCOUT_DRY_RUN 等。
+    env_file:
+      - .env
+
+    volumes:
+      # DB・ログインセッション・kill switch（data/state/STOP）を永続化する。
+      - ./data:/app/data
+      # セレクタ上書き（config/bizreach_selectors.yaml）等の設定を反映する。
+      - ./config:/app/config
+
+    # 常駐サービスとして1日(86400秒)ごとに「取り込み→生成→初回送信→再送」を回す例。
+    # ★まずは検証★ .env で BIZSCOUT_DRY_RUN=true（実送信なし）にしてから起動すること。
+    #   本番送信に切り替えるのは、文面と動作を十分に確認した後。
+    # search-url には保存済み検索のURLを指定する。
+    # 単発で試す場合は command を ["report"] や ["run-resends", "--no-send"] 等に変える。
+    command: ["serve", "--search-url", "https://cr-support.jp/search/saved/xxxx", "--interval", "86400"]
+
+    # コンテナ異常終了時は自動再起動（手動停止時は再起動しない）。
+    restart: unless-stopped
+
+    # ログをローテーションし、肥大化を防ぐ。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

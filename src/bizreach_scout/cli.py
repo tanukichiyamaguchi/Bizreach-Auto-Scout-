@@ -203,6 +203,38 @@ def report() -> None:
     repo.close()
 
 
+@cli.command()
+def doctor() -> None:
+    """完全自動運用の起動前チェック（環境・設定・依存を点検）。"""
+    from .ops import format_report, overall_ok, run_checks
+
+    checks = run_checks()
+    click.echo(format_report(checks))
+    raise SystemExit(0 if overall_ok(checks) else 1)
+
+
+@cli.command()
+@click.option("--search-url", help="bizreach の検索結果URL（保存検索）。未指定なら再送のみ")
+@click.option("--interval", default=86400, help="サイクル間隔（秒）。既定は1日(86400)")
+@click.option("--max", "max_candidates", default=50, help="1サイクルの最大処理件数")
+@click.option("--headless/--no-headless", default=True, help="ブラウザをヘッドレスで起動")
+@click.option("--once", is_flag=True, help="1サイクルだけ実行して終了")
+def serve(search_url: str | None, interval: int, max_candidates: int,
+          headless: bool, once: bool) -> None:
+    """取り込み→生成→送信→再送を一定間隔で自動実行する常駐サービス。"""
+    from .service import serve as _serve
+
+    if get_settings().dry_run:
+        click.echo("※ DRY_RUN 有効: 文面は入力しますが実送信は行いません（.env の BIZSCOUT_DRY_RUN）。")
+    _serve(
+        search_url=search_url,
+        interval=interval,
+        max_candidates=max_candidates,
+        headless=headless,
+        once=once,
+    )
+
+
 def main() -> None:
     cli()
 

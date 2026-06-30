@@ -1,0 +1,50 @@
+# =============================================================
+#  Bizreach Auto Scout — cron 設定例（Linux / macOS）
+# -------------------------------------------------------------
+#  毎日決まった時刻に「新規候補の取り込み・初回送信」と「再送」を実行する。
+#  反映方法:  crontab -e で開き、以下を環境に合わせて編集して貼り付ける。
+#
+#  ★まずは検証★ 本番送信の前に、必ず .env で BIZSCOUT_DRY_RUN=true（実送信なし）
+#    にして動作・ログ・生成文面を確認すること。問題なければ false に切り替える。
+#
+#  ◎緊急停止（kill switch）:
+#    送信を即座に止めたいときは、kill switch ファイルを作成する。
+#      touch /home/youruser/Bizreach-Auto-Scout-/data/state/STOP
+#    （既定パス。.env の BIZSCOUT_KILL_SWITCH で変更可）
+#    ファイルが存在する間、再送・送信はすべてスキップされる。
+#    再開するときは削除する:
+#      rm /home/youruser/Bizreach-Auto-Scout-/data/state/STOP
+# =============================================================
+
+# --- 環境変数 ----------------------------------------------------------------
+# cron は最小限の環境で動くため、パスとプロジェクト位置を明示する。
+SHELL=/bin/bash
+PATH=/usr/bin:/bin:/usr/local/bin
+# プロジェクトのルート（このパスは各自の配置に合わせて書き換える）。
+BIZSCOUT_HOME=/home/youruser/Bizreach-Auto-Scout-
+
+# --- 凡例（cron のフィールド）------------------------------------------------
+# ┌───── 分 (0-59)
+# │ ┌─── 時 (0-23)
+# │ │ ┌─ 日 (1-31)
+# │ │ │ ┌ 月 (1-12)
+# │ │ │ │ ┌ 曜日 (0-7, 0/7=日)
+# │ │ │ │ │
+# * * * * *  実行するコマンド
+
+# --- 1) 新規候補の取り込み→生成→初回送信（毎日 09:00）------------------------
+#   .venv のフルパスで bizscout を直接呼ぶ（PATH 非依存で確実）。
+#   実行ディレクトリをプロジェクトルートに移し、ログを追記する。
+#   --search-url には保存済み検索のURLを各自指定する。
+0 9 * * *  cd "$BIZSCOUT_HOME" && /home/youruser/Bizreach-Auto-Scout-/.venv/bin/bizscout run --source bizreach --search-url "https://cr-support.jp/search/saved/xxxx" >> "$BIZSCOUT_HOME/logs/cron-run.log" 2>&1
+
+# --- 2) 期限到来分の再送（毎日 10:00）----------------------------------------
+#   初回送信から BIZSCOUT_RESEND_AFTER_DAYS 日後の候補へ再送する。
+0 10 * * *  cd "$BIZSCOUT_HOME" && /home/youruser/Bizreach-Auto-Scout-/.venv/bin/bizscout run-resends >> "$BIZSCOUT_HOME/logs/cron-resends.log" 2>&1
+
+# --- 補足 --------------------------------------------------------------------
+# ・送信件数の上限は .env の BIZSCOUT_MAX_SENDS_PER_RUN で制御する（暴走防止）。
+# ・送信間隔は BIZSCOUT_SEND_DELAY_MIN / MAX（秒）でランダム待機する。
+# ・初回検証時は --no-send を付けると送信せず生成のみ確認できる:
+#     bizscout run --source bizreach --search-url "..." --no-send
+#     bizscout run-resends --no-send

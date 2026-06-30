@@ -1,0 +1,49 @@
+# =============================================================
+#  Docker ビルドコンテキストから除外するファイル
+#  （イメージを軽量に保ち、機密や実行時生成物を含めない）
+# =============================================================
+
+# Python 仮想環境・キャッシュ類
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Git 管理ファイル
+.git/
+.gitignore
+.github/
+
+# 機密・ローカル設定（イメージに焼き込まない。実行時に env_file/ボリュームで渡す）
+.env
+*.local.env
+config/*.secret.*
+
+# 実行時データ（DB・セッション・エクスポート・状態ファイルはボリューム側で管理）
+data/*.db
+data/*.sqlite3
+data/exports/
+data/sessions/
+data/state/
+
+# Playwright 認証状態
+.auth/
+storage_state.json
+
+# ログ
+logs/
+*.log
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
