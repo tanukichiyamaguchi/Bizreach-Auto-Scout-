@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -22,11 +23,12 @@ _USER_INSTRUCTION = (
 def _normalize_subject(subject: str, rules: dict) -> str:
     prefix = rules.get("constraints", {}).get("subject_prefix", "【Premium Offer】")
     s = subject.strip()
-    if not s.startswith(prefix):
-        # 既に Premium Offer を含むなら整形、無ければ付与。
-        s = s.lstrip("【】 ")
-        s = f"{prefix}{s}"
-    return s
+    if s.startswith(prefix):
+        return s
+    # 先頭にある【…】ブロック（誤った接頭辞）をまとめて除去してから付与。
+    # 単純な lstrip だと "【急募】X" → "急募】X" のように閉じ括弧が残り壊れるため。
+    s = re.sub(r"^(?:【[^】]*】\s*)+", "", s).strip()
+    return f"{prefix}{s}"
 
 
 class ScoutGenerator:

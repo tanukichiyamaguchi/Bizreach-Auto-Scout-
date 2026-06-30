@@ -23,6 +23,7 @@ from .storage.repository import Repository
 class PipelineReport:
     processed: int = 0
     generated: int = 0
+    reused: int = 0
     sent: int = 0
     dry_run: int = 0
     skipped_duplicate: int = 0
@@ -36,6 +37,7 @@ class PipelineReport:
             "==== スカウト処理レポート ====",
             f"処理候補者数      : {self.processed}",
             f"文面生成          : {self.generated}",
+            f"文面再利用        : {self.reused}",
             f"初回送信(実送信)  : {self.sent}",
             f"初回送信(dry-run) : {self.dry_run}",
             f"重複スキップ      : {self.skipped_duplicate}",
@@ -101,23 +103,30 @@ class ScoutPipeline:
                 return
             logger.warning("対象外だが処理続行: %s (%s)", mno, " / ".join(elig.failed))
 
-        if self.repo.first_already_handled(mno):
+        # 送信済みのみ重複スキップ。未送信(generated/skipped/failed)は再試行する。
+        if self.repo.first_sent(mno):
             report.skipped_duplicate += 1
-            logger.info("既に処理済み（重複スキップ）: %s", mno)
+            logger.info("既に送信済み（重複スキップ）: %s", mno)
             return
 
-        # --- 文面生成 ---
-        try:
-            scout = self.generator.generate(candidate)
-        except Exception as e:  # noqa: BLE001
-            report.failed += 1
-            report.errors.append((mno, f"生成失敗: {e}"))
-            logger.error("文面生成に失敗: %s: %s", mno, e)
-            return
-
-        self.repo.record_generated(scout, self.settings.resend_after_days)
-        report.generated += 1
-        logger.info("文面生成完了: %s", mno)
+        # --- 文面の用意（既存の未送信文面があれば再生成せず再利用）---
+        existing = self.repo.get_scout(mno, "first")
+        if existing is not None:
+            subject, body = existing["subject"], existing["body"]
+            report.reused += 1
+            logger.info("生成済み文面を再利用: %s", mno)
+        else:
+            try:
+                scout = self.generator.generate(candidate)
+            except Exception as e:  # noqa: BLE001
+                report.failed += 1
+                report.errors.append((mno, f"生成失敗: {e}"))
+                logger.error("文面生成に失敗: %s: %s", mno, e)
+                return
+            self.repo.record_generated(scout, self.settings.resend_after_days)
+            report.generated += 1
+            subject, body = scout.first.subject, scout.first.body
+            logger.info("文面生成完了: %s", mno)
 
         # --- 初回送信 ---
         if not (send and self.sender is not None):
@@ -132,7 +141,7 @@ class ScoutPipeline:
             self.repo.mark_skipped(mno, "first", "no profile_url for sending")
             return
 
-        outcome = self.sender.send_scout(candidate.profile_url, scout.first.subject, scout.first.body)
+        outcome = self.sender.send_scout(candidate.profile_url, subject, body)
         if outcome.status == "sent":
             self.repo.mark_sent(mno, "first", self.settings.resend_after_days)
             report.sent += 1
@@ -142,6 +151,7 @@ class ScoutPipeline:
             # 実送信していないので generated のまま（後で本番送信できる）。
             report.dry_run += 1
             logger.info("[DRY-RUN] 初回送信を模擬: %s", mno)
+            self._send_delay()  # dry_run でも実ブラウザ操作のため人間的間隔を空ける
         elif outcome.status == "blocked":
             self.repo.mark_skipped(mno, "first", outcome.detail)
             logger.warning("送信ブロック（kill switch等）: %s", mno)

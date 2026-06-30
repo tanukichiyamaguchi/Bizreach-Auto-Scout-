@@ -37,3 +37,18 @@ def test_body_rejects_bizreach_preface():
 
 def test_clean_body_passes():
     assert validate_body("ご経歴を拝見し、ぜひお話ししたく存じます。") == []
+
+
+def test_allowed_url_passes():
+    assert validate_body("詳細はこちら https://www.consuldent.jp/members.html") == []
+
+
+def test_disallowed_url_flagged():
+    issues = validate_body("こちらをご覧ください https://attacker.example/phish")
+    assert any("許可されていないURL" in i for i in issues)
+
+
+def test_star_emoji_detected():
+    # ⭐ (U+2B50) は補助記号帯。固定フッターの ↓ (U+2193) とは別。
+    issues = validate_body("おすすめ⭐です")
+    assert any("絵文字" in i for i in issues)

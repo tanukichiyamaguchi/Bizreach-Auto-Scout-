@@ -44,6 +44,12 @@ def run_due_resends(repo: Repository, sender, now: datetime | None = None) -> Re
     logger.info("再送対象: %d 件", report.due)
 
     for row in rows:
+        # 暴走防止: 初回送信と同じく1実行あたりの送信上限を適用。
+        if (report.sent + report.dry_run) >= settings.max_sends_per_run:
+            logger.info("再送の送信上限(%d)に達したため残り%d件を次回に持ち越し。",
+                        settings.max_sends_per_run, report.due - report.sent - report.dry_run)
+            break
+
         mno = row["member_no"]
         candidate = repo.load_candidate(mno)
         url = candidate.profile_url if candidate else ""

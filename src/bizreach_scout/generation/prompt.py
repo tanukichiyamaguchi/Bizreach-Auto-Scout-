@@ -172,6 +172,7 @@ def build_system_prompt(
     company: dict | None = None,
 ) -> tuple[str, str]:
     """(system_prompt, tone_key) を返す。"""
+    rules = rules or scout_rules()
     template = prompt_template()
     tone_guidance, tone_key = render_tone_guidance(candidate, rules)
     prompt = (
@@ -181,4 +182,18 @@ def build_system_prompt(
         .replace("<<SPECIAL_INSTRUCTIONS>>", render_special_instructions(candidate, rules, company))
         .replace("<<CANDIDATE_PROFILE>>", render_candidate_profile(candidate))
     )
+    prompt += "\n\n" + _render_resend_rules(rules)
     return prompt, tone_key
+
+
+def _render_resend_rules(rules: dict) -> str:
+    cfg = rules.get("resend", {})
+    ratio = cfg.get("length_ratio", 0.5)
+    max_mentions = cfg.get("max_consultant_mentions", 1)
+    pct = int(round(ratio * 100))
+    return (
+        "# 再送本文の制約\n"
+        f"- 再送本文(resend_body)は初回本文(④〜⑧の合計)の約{pct}%の分量に収めること。\n"
+        f"- 共通点コンサルタントへの言及は再送では最大{max_mentions}名までに絞ること。\n"
+        "- 冒頭で再送であることに自然に触れ、初回とは異なる切り口・訴求にすること。"
+    )

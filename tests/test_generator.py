@@ -53,6 +53,17 @@ def test_subject_normalized_when_prefix_missing():
     assert scout.first.subject.startswith("【Premium Offer】")
 
 
+def test_normalize_subject_strips_wrong_bracket_block():
+    from bizreach_scout.generation.generator import _normalize_subject
+
+    rules = {"constraints": {"subject_prefix": "【Premium Offer】"}}
+    # 誤った【】が先頭にあっても閉じ括弧が宙に浮かない
+    out = _normalize_subject("【急募】優秀なエンジニア", rules)
+    assert out == "【Premium Offer】優秀なエンジニア"
+    # 既に正しい接頭辞ならそのまま
+    assert _normalize_subject("【Premium Offer】X", rules) == "【Premium Offer】X"
+
+
 def test_render_for_human_has_code_blocks():
     gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
     scout = gen.generate(make_candidate())

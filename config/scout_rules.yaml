@@ -72,6 +72,9 @@ constraints:
   max_exclamations: 2                    # 感嘆符は最大2回
   forbid_emoji: true
   forbid_phrase: ["ビズリーチにて"]      # 「ビズリーチにて」という前置きは使わない
+  # 本文に記載してよいURLのドメイン（プロンプトインジェクション対策）。
+  # 候補者データ由来の外部リンク混入を検出する。
+  allowed_url_domains: ["consuldent.jp"]
 
 # --- マッチング（共通点）特別ルール ------------------------------------------
 matching:

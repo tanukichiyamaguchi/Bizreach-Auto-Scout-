@@ -12,13 +12,17 @@ from ..config import scout_rules
 _EMOJI_RE = re.compile(
     "["
     "\U0001f300-\U0001faff"  # 絵文字本体（顔・記号・乗り物など）
-    "\U00002600-\U000026ff"  # その他記号（☀☂等）
+    "\U00002600-\U000026ff"  # その他記号（☀☂★♪等）
     "\U00002702-\U000027b0"  # 装飾記号（✂✈✨❤等）
+    "\U00002b00-\U00002bff"  # 補助記号・矢印B（⭐⬆⬇等。固定フッターの↓ U+2193 は対象外）
     "\U0001f000-\U0001f0ff"  # 麻雀・トランプ
     "\U0001f1e6-\U0001f1ff"  # 国旗
     "\U0000fe0f"             # 異体字セレクタ16（絵文字表示）
     "]"
 )
+
+# 本文中のURL抽出（日本語の句読点・括弧で終端）。
+_URL_RE = re.compile(r"https?://[^\s　、。」』）)】]+")
 
 
 def validate_subject(subject: str, rules: dict | None = None) -> list[str]:
@@ -53,6 +57,13 @@ def validate_body(body: str, rules: dict | None = None) -> list[str]:
 
     if cfg.get("forbid_emoji", True) and _EMOJI_RE.search(body):
         issues.append("絵文字が含まれています")
+
+    # 許可ドメイン以外のURL混入を検出（候補者データ由来リンクの注入対策）。
+    allowed = cfg.get("allowed_url_domains", [])
+    if allowed:
+        for url in _URL_RE.findall(body):
+            if not any(dom in url for dom in allowed):
+                issues.append(f"許可されていないURLが含まれています: {url}")
 
     return issues
 
