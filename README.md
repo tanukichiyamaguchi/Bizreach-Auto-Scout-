@@ -112,6 +112,7 @@ bizscout import-consultants path/to/consultant_profiles_v2.docx
 | [docs/運用手順.md](docs/運用手順.md) | インストール→`.env`→セレクタ→`doctor`→ドライラン→本番送信→定期実行 までの手順 |
 | [docs/セレクタ設定ガイド.md](docs/セレクタ設定ガイド.md) | ビズリーチ実画面のセレクタを開発者ツールで特定し `bizreach_selectors.yaml` に設定する方法 |
 | [docs/トラブルシューティング.md](docs/トラブルシューティング.md) | ログイン失敗・送信されない・再送が走らない等の対処 |
+| [docs/GitHub Actionsで運用.md](docs/GitHub%20Actions%E3%81%A7%E9%81%8B%E7%94%A8.md) | **サーバー不要**。GitHub Actions をスケジューラ兼実行環境にする手順（`.github/workflows/scout.yml`） |
 | [Dockerfile](Dockerfile) / [docker-compose.yml](docker-compose.yml) | Playwright同梱イメージでの常駐運用 |
 | [deploy/](deploy/) | cron 例・systemd unit/timer・Windowsタスクスケジューラの案内 |
 

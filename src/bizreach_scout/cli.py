@@ -204,6 +204,29 @@ def report() -> None:
 
 
 @cli.command()
+@click.option("--headless/--no-headless", default=False,
+              help="既定はブラウザ表示（2FAを手動入力するため）")
+def login(headless: bool) -> None:
+    """ビズリーチに一度ログインしてセッション(storage_state)を保存する。
+
+    2段階認証はブラウザ上で手動入力してください。保存されたセッションファイルは、
+    GitHub Actions で運用する場合に secret(BIZREACH_STORAGE_STATE_B64)へ
+    base64 で登録すると、CI 上の自動ログイン/2FA を回避できます。
+    """
+    from .bizreach.client import BizreachClient
+
+    client = BizreachClient(headless=headless).start()
+    try:
+        client.ensure_logged_in()
+        path = client._storage_state_path()
+        click.echo(f"\nセッションを保存しました: {path}")
+        click.echo("GitHub Actions 用に base64 化するには:")
+        click.echo(f"  base64 -w0 {path}    # この出力を secret BIZREACH_STORAGE_STATE_B64 に登録")
+    finally:
+        client.close()
+
+
+@cli.command()
 def doctor() -> None:
     """完全自動運用の起動前チェック（環境・設定・依存を点検）。"""
     from .ops import format_report, overall_ok, run_checks
