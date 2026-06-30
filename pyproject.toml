@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bizreach-auto-scout"
+version = "0.1.0"
+description = "医院・病院経営コンサル向け、ビズリーチ自動スカウト文面生成・送信システム"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "経営戦略研究所株式会社" }]
+dependencies = [
+    "anthropic>=0.40.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.2.0",
+    "click>=8.1.0",
+    "playwright>=1.40.0",
+    "python-docx>=1.1.0",
+]
+
+[project.scripts]
+bizscout = "bizreach_scout.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0", "pytest-cov>=4.1.0", "ruff>=0.1.0", "mypy>=1.7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

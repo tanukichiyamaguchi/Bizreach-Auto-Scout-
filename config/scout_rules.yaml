@@ -1,0 +1,83 @@
+# =============================================================
+#  スカウト生成・配信ルール（コードが参照する設定の単一情報源）
+#  文面の言い回しそのものは config/prompt_template.md を参照。
+# =============================================================
+
+# --- 候補者の対象条件（必須）-------------------------------------------------
+# いずれかを満たさない候補者は「要確認」としてフラグし、完全自動送信からは除外する。
+eligibility:
+  min_age: 27                 # 27歳以上
+  min_same_company_years: 3   # 3年以上の同じ会社での勤務歴
+  required_gender: male       # 男性
+  required_education: bachelor # 大学・大学院卒業以上（bachelor 以上）
+  # 上記を満たさない場合の挙動: skip(送信せず要確認リストへ) / send(警告のみ)
+  on_ineligible: skip
+
+# --- 年齢・経歴別トーン自動調整 ----------------------------------------------
+# generator が候補者を分類してプロンプトに差し込む。
+tone_profiles:
+  - key: late20s
+    label: 20代後半（経験3-5年）
+    match: { age_max: 29, experience_max: 5 }
+    tone: 熱量高め・成長機会を強調
+    length: 400-600字
+    focus: 成長環境、若手抜擢実績、モデル年収の伸び
+  - key: early30s
+    label: 30代前半（経験5-8年）
+    match: { age_min: 30, age_max: 34 }
+    tone: プロフェッショナル・裁量を強調
+    length: 500-700字
+    focus: 経営への深い関与、担当医院の裁量、年収水準
+  - key: late30s_plus
+    label: 30代後半以上（経験10年+）
+    match: { age_min: 35 }
+    tone: 敬意と対等感・経営者視点
+    length: 500-700字
+    focus: 経営パートナーとしての位置づけ、社会的意義、報酬水準
+  - key: consultant
+    label: コンサル出身
+    match: { job_functions: [コンサル, コンサルタント, ストラテジー, 戦略] }
+    tone: ロジカル・差別化を明確に
+    length: 500-700字
+    focus: ハンズオンの独自性、売上目標なしの文化、長期伴走型
+  - key: sales
+    label: 営業出身
+    match: { job_functions: [営業, セールス, アカウント] }
+    tone: 親しみやすさ・具体的イメージ
+    length: 400-600字
+    focus: 顧客との関係構築、成果が年収に直結、研修制度の充実
+  - key: marketing
+    label: マーケティング出身
+    match: { job_functions: [マーケ, マーケティング, 広告, デジタル] }
+    tone: 専門性への敬意・活用イメージ
+    length: 500-700字
+    focus: マーケティング×経営の掛け算、デジタル施策の裁量
+  - key: planning
+    label: 事業企画・経営企画出身
+    match: { job_functions: [事業企画, 経営企画, 事業開発, 企画] }
+    tone: 経営視座・インパクトの大きさ
+    length: 500-700字
+    focus: 経営全般への関与、480医院の経営変革、社会貢献性
+
+# --- 再送ルール --------------------------------------------------------------
+resend:
+  after_days: 5               # 初回送信から5日後
+  length_ratio: 0.5           # 初回の約1/2の文章量
+  max_consultant_mentions: 1  # 共通点コンサルタントへの言及は数を絞る
+
+# --- 文面の固定ルール（バリデーションに使用）--------------------------------
+constraints:
+  subject_prefix: "【Premium Offer】"
+  forbid_strings: ["――", "「", "」"]   # 装飾的ダッシュ・カギ括弧の禁止
+  max_exclamations: 2                    # 感嘆符は最大2回
+  forbid_emoji: true
+  forbid_phrase: ["ビズリーチにて"]      # 「ビズリーチにて」という前置きは使わない
+
+# --- マッチング（共通点）特別ルール ------------------------------------------
+matching:
+  recruit_keywords: [リクルート, Recruit, recruit, リクルートキャリア, リクルートエージェント,
+                     リクルートライフスタイル, リクルートホールディングス]
+  insurance_keywords: [保険, 生命保険, 損保, 損害保険, プルデンシャル, ソニー生命,
+                       第一生命, 日本生命, 明治安田, 外資系保険]
+  # 共通点を判定する候補者属性のフィールド
+  match_fields: [prior_companies, current_company, industry, job_function, university]

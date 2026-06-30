@@ -1,0 +1,126 @@
+{
+  "_note": "サンプルデータ。実データは consultant_profiles_v2.docx から `bizscout import-consultants` で生成し config/consultants.json に保存してください。プロフィールURLはダミーです。",
+  "_schema": {
+    "id": "一意なID",
+    "display_name": "本文で言及する際の表記（社員のため実名/イニシャル可）",
+    "former_companies": "前職企業名のリスト（共通点マッチングに使用）",
+    "industries": "経験業界のリスト",
+    "universities": "出身大学のリスト",
+    "roles": "前職での職種・役割",
+    "specialties": "得意領域",
+    "profile_url": "メンバー紹介ページのURL",
+    "tags": "recruit / insurance / sales / marketing / planning など"
+  },
+  "consultants": [
+    {
+      "id": "c001",
+      "display_name": "A.S（リクルート出身コンサルタント）",
+      "former_companies": ["リクルート", "リクルートキャリア"],
+      "industries": ["人材", "HR"],
+      "universities": ["早稲田大学"],
+      "roles": ["法人営業", "リーダー"],
+      "specialties": ["採用支援", "組織開発"],
+      "profile_url": "https://www.consuldent.jp/members.html#c001",
+      "tags": ["recruit", "sales"]
+    },
+    {
+      "id": "c002",
+      "display_name": "T.K（リクルート出身コンサルタント）",
+      "former_companies": ["リクルートライフスタイル"],
+      "industries": ["人材", "販促"],
+      "universities": ["慶應義塾大学"],
+      "roles": ["営業", "マネージャー"],
+      "specialties": ["マーケティング支援", "集客"],
+      "profile_url": "https://www.consuldent.jp/members.html#c002",
+      "tags": ["recruit", "marketing"]
+    },
+    {
+      "id": "c003",
+      "display_name": "M.N（リクルート出身コンサルタント）",
+      "former_companies": ["リクルートホールディングス"],
+      "industries": ["人材"],
+      "universities": ["明治大学"],
+      "roles": ["事業企画"],
+      "specialties": ["事業開発", "新規事業"],
+      "profile_url": "https://www.consuldent.jp/members.html#c003",
+      "tags": ["recruit", "planning"]
+    },
+    {
+      "id": "c004",
+      "display_name": "Y.H（リクルート出身コンサルタント）",
+      "former_companies": ["リクルートエージェント"],
+      "industries": ["人材"],
+      "universities": ["立教大学"],
+      "roles": ["キャリアアドバイザー", "営業"],
+      "specialties": ["採用", "面接設計"],
+      "profile_url": "https://www.consuldent.jp/members.html#c004",
+      "tags": ["recruit", "sales"]
+    },
+    {
+      "id": "c005",
+      "display_name": "K.T（リクルート出身コンサルタント）",
+      "former_companies": ["リクルート"],
+      "industries": ["人材", "教育"],
+      "universities": ["中央大学"],
+      "roles": ["営業", "教育研修"],
+      "specialties": ["人材育成", "研修設計"],
+      "profile_url": "https://www.consuldent.jp/members.html#c005",
+      "tags": ["recruit"]
+    },
+    {
+      "id": "c006",
+      "display_name": "S.W（リクルート出身コンサルタント）",
+      "former_companies": ["リクルートキャリア"],
+      "industries": ["人材"],
+      "universities": ["法政大学"],
+      "roles": ["法人営業", "チーフ"],
+      "specialties": ["大型提案", "アカウント開拓"],
+      "profile_url": "https://www.consuldent.jp/members.html#c006",
+      "tags": ["recruit", "sales"]
+    },
+    {
+      "id": "c007",
+      "display_name": "R.I（リクルート出身コンサルタント）",
+      "former_companies": ["リクルート"],
+      "industries": ["人材", "広告"],
+      "universities": ["青山学院大学"],
+      "roles": ["広告営業", "マーケティング"],
+      "specialties": ["広告運用", "SEO/SNS"],
+      "profile_url": "https://www.consuldent.jp/members.html#c007",
+      "tags": ["recruit", "marketing"]
+    },
+    {
+      "id": "c008",
+      "display_name": "H.M（プルデンシャル生命出身コンサルタント）",
+      "former_companies": ["プルデンシャル生命"],
+      "industries": ["保険", "生命保険"],
+      "universities": ["上智大学"],
+      "roles": ["ライフプランナー", "営業"],
+      "specialties": ["無形商材営業", "顧客信頼構築"],
+      "profile_url": "https://www.consuldent.jp/recruitment/2020/04/3272/",
+      "tags": ["insurance"]
+    },
+    {
+      "id": "c009",
+      "display_name": "N.F（外資系コンサル出身コンサルタント）",
+      "former_companies": ["アクセンチュア"],
+      "industries": ["コンサルティング"],
+      "universities": ["東京大学"],
+      "roles": ["戦略コンサルタント"],
+      "specialties": ["業務改革", "DX"],
+      "profile_url": "https://www.consuldent.jp/members.html#c009",
+      "tags": ["consultant"]
+    },
+    {
+      "id": "c010",
+      "display_name": "D.O（事業会社経営企画出身コンサルタント）",
+      "former_companies": ["事業会社（経営企画）"],
+      "industries": ["メーカー"],
+      "universities": ["神戸大学"],
+      "roles": ["経営企画"],
+      "specialties": ["中期経営計画", "事業ポートフォリオ"],
+      "profile_url": "https://www.consuldent.jp/members.html#c010",
+      "tags": ["planning"]
+    }
+  ]
+}

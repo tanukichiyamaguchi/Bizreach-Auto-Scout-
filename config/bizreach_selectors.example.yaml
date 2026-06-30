@@ -1,0 +1,30 @@
+# ビズリーチ画面セレクタの上書き設定（テンプレート）。
+# config/bizreach_selectors.yaml にコピーし、実際のDOMに合わせて修正してください。
+# 値を空にすると selectors.py のデフォルトが使われます。
+
+# --- URL ---
+login_url: ""
+base_url: ""
+search_url: ""
+
+# --- ログイン ---
+login_email: ""
+login_password: ""
+login_submit: ""
+logged_in_marker: ""
+
+# --- 検索結果 ---
+result_link: ""
+next_page: ""
+
+# --- プロフィール ---
+profile_root: ""
+profile_member_no: ""
+
+# --- スカウト送信 ---
+scout_button: ""
+scout_subject: ""
+scout_body: ""
+scout_send: ""
+scout_confirm: ""
+scout_sent_marker: ""
