@@ -14,8 +14,12 @@ login_email: "input[name='mailAddress']"
 login_password: "input[name='password']"
 # ログインボタン（要最終確認）。複数候補は先頭を使用。
 login_submit: "#jsi_form input[type='submit'], #jsi_form button"
-# ログイン成功の判定要素（要調整。ログイン後に必ず表示される要素へ）。
+# ログイン成功の判定要素（ヘッダーの「ログアウト」リンクで判定）。
 logged_in_marker: "text=ログアウト"
+
+# --- グループ選択（実画面から確認済み）---
+# ログイン後 /login/selectGroup/ で担当グループ「経営戦略研究所コンサルタント採用」を選択。
+group_select_link: ".ns-pg-assistant-login-list a[href*='/login/changeRecruiter/']"
 
 # --- 検索結果（後で追記）---
 # result_link: ""

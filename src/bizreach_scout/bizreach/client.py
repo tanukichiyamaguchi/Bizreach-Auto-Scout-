@@ -93,13 +93,37 @@ class BizreachClient:
 
     # --- ログイン -------------------------------------------------------------
     def ensure_logged_in(self) -> None:
-        """保存済みセッションで未ログインならログインする。"""
+        """保存済みセッションで未ログインならログインし、担当グループを選択する。"""
         self.page.goto(self.sel.base_url, wait_until="domcontentloaded")
         self.human_delay()
-        if self.page.locator(self.sel.logged_in_marker).count() > 0:
-            logger.info("既存セッションでログイン済み。")
+        if self.page.locator(self.sel.logged_in_marker).count() == 0:
+            self.login()
+        self.select_group()
+
+    def select_group(self) -> None:
+        """ログイン後、担当グループを選択する（未選択だと検索/スカウトに進めない）。
+
+        ビズリーチは /login/selectGroup/ でグループを選ばせる。グループが1つでも
+        明示的に選択する必要があるため、選択リンクがあればクリックする。
+        """
+        sel = getattr(self.sel, "group_select_link", "")
+        if not sel:
             return
-        self.login()
+        try:
+            group_url = self.sel.base_url.rstrip("/") + "/login/selectGroup/"
+            self.page.goto(group_url, wait_until="domcontentloaded")
+            self.human_delay()
+            link = self.page.locator(sel)
+            n = link.count()
+            if n > 0:
+                logger.info("担当グループを選択します（候補 %d 件の先頭）。", n)
+                link.first.click()
+                self.page.wait_for_load_state("networkidle")
+                self.human_delay()
+            else:
+                logger.info("グループ選択リンクが見つかりません（選択済み/不要の可能性）。")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("グループ選択でエラー: %s", e)
 
     def login(self) -> None:
         if not self.creds.email or not self.creds.password:

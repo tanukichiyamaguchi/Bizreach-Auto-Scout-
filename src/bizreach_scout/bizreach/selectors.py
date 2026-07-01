@@ -29,6 +29,9 @@ class Selectors:
     login_submit: str = "button[type='submit']"
     logged_in_marker: str = "text=ログアウト"  # ログイン成功の判定要素（要確認）
 
+    # --- グループ選択（ログイン後に担当グループを選ぶ）---
+    group_select_link: str = ".ns-pg-assistant-login-list a[href*='/login/changeRecruiter/']"
+
     # --- 検索結果 ---
     result_card: str = "[data-testid='candidate-card'], .candidate-list-item"
     result_member_no: str = "[data-testid='member-no'], .member-no"
