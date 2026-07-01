@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # 再送
     resend_after_days: int = 5
 
+    # ブラウザ（bot検知対策で実ブラウザのUAに寄せる）
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+
     # パス
     home: str = "."
     db_path: str = "data/bizscout.db"

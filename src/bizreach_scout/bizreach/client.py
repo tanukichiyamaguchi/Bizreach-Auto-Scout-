@@ -36,10 +36,20 @@ class BizreachClient:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
+        # 自動化フラグを隠し、実ブラウザに寄せる。
+        self._browser = self._pw.chromium.launch(
+            headless=self.headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
 
         state_path = self._storage_state_path()
-        ctx_kwargs = {"locale": "ja-JP"}
+        ctx_kwargs: dict = {
+            "locale": "ja-JP",
+            "timezone_id": "Asia/Tokyo",
+            "user_agent": self.settings.user_agent,
+            "viewport": {"width": 1366, "height": 900},
+            "extra_http_headers": {"Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"},
+        }
         if state_path.exists():
             ctx_kwargs["storage_state"] = str(state_path)
         self._context = self._browser.new_context(**ctx_kwargs)
