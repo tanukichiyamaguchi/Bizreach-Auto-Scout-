@@ -103,8 +103,12 @@ class BizreachClient:
         self.human_delay(0.3, 0.9)
         self.page.fill(self.sel.login_password, self.creds.password)
         self.human_delay(0.3, 0.9)
-        # セレクタが複数候補(カンマ区切り)でも動くよう first を明示。
-        self.page.locator(self.sel.login_submit).first.click()
+        # ログインボタンをクリック。見つからなければ Enter 送信でフォールバック。
+        try:
+            self.page.locator(self.sel.login_submit).first.click(timeout=5000)
+        except Exception as e:  # noqa: BLE001
+            logger.info("ログインボタンをクリックできず(%s)。Enterで送信します。", e)
+            self.page.press(self.sel.login_password, "Enter")
         self.page.wait_for_load_state("networkidle")
         self.human_delay()
         if self.page.locator(self.sel.logged_in_marker).count() == 0:
