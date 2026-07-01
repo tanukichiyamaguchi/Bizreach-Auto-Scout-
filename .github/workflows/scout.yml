@@ -16,7 +16,7 @@ on:
         options: ["true", "false"]
         default: "true"
       search_url:
-        description: "ビズリーチ保存検索の結果URL（空なら再送のみ）"
+        description: "ビズリーチ保存検索の結果URL（複数可: 半角スペースか | で区切る。空なら再送のみ）"
         type: string
         default: ""
       max:

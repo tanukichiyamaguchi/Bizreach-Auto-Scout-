@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 import signal
 import threading
 
@@ -23,8 +24,20 @@ def _kill_switch_active() -> bool:
     return get_settings().kill_switch_path.exists()
 
 
+def parse_search_urls(value: str | list[str] | None) -> list[str]:
+    """検索URL指定を複数URLのリストに正規化する。
+
+    1つでも複数でも受け付ける。複数指定は「半角スペース・改行・パイプ(|)」で区切る。
+    （URLにカンマが含まれ得るため、カンマは区切り文字にしない）
+    """
+    if not value:
+        return []
+    items = value if isinstance(value, (list, tuple)) else re.split(r"[\s|]+", str(value).strip())
+    return [u.strip() for u in items if u and u.strip()]
+
+
 def run_cycle(
-    search_url: str | None,
+    search_url: str | list[str] | None,
     max_candidates: int = 50,
     headless: bool = True,
     send: bool = True,
@@ -56,21 +69,23 @@ def run_cycle(
         client.ensure_logged_in()
         sender = BizreachSender(client)
 
-        # --- 初回送信パイプライン（search_url がある場合のみ）---
-        if search_url:
-            source = BizreachSource(search_url, max_candidates, client=client)
+        # --- 初回送信パイプライン（search_url がある場合のみ。複数URL対応）---
+        urls = parse_search_urls(search_url)
+        if urls:
+            keys = ("processed", "generated", "reused", "sent", "dry_run",
+                    "skipped_duplicate", "skipped_ineligible", "failed")
+            agg = dict.fromkeys(keys, 0)
             pipeline = ScoutPipeline(repo=repo, generator=None, sender=sender)
-            report = pipeline.run(source, send=send)
-            result["pipeline"] = {
-                "processed": report.processed,
-                "generated": report.generated,
-                "reused": report.reused,
-                "sent": report.sent,
-                "dry_run": report.dry_run,
-                "skipped_duplicate": report.skipped_duplicate,
-                "skipped_ineligible": report.skipped_ineligible,
-                "failed": report.failed,
-            }
+            for i, url in enumerate(urls, start=1):
+                logger.info("検索URL %d/%d を処理します。", i, len(urls))
+                source = BizreachSource(url, max_candidates, client=client)
+                # 既送信件数を渡し、複数URLでも1実行あたりの送信上限を守る。
+                sent_so_far = agg["sent"] + agg["dry_run"]
+                report = pipeline.run(source, send=send, sent_offset=sent_so_far)
+                for k in keys:
+                    agg[k] += getattr(report, k, 0)
+            agg["search_urls"] = len(urls)
+            result["pipeline"] = agg
         else:
             logger.info("search_url 未指定のため取り込み・初回送信はスキップします。")
 

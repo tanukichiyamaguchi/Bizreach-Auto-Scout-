@@ -47,8 +47,8 @@ class FakePipeline:
         self.run_calls = []
         FakePipeline.instances.append(self)
 
-    def run(self, source, send=True):
-        self.run_calls.append((source, send))
+    def run(self, source, send=True, **kwargs):
+        self.run_calls.append((source, send, kwargs))
         return SimpleNamespace(
             processed=3,
             generated=2,
@@ -183,6 +183,38 @@ def test_run_cycle_without_search_url_only_resends(patched):
     assert FakePipeline.instances == []  # パイプライン未起動
     assert patched["source"] == []       # 取り込みソース未生成
     assert len(patched["resend"]) == 1
+
+
+def test_parse_search_urls_variants():
+    """複数URLは 空白・改行・パイプ で区切る。カンマは区切らない。"""
+    assert service.parse_search_urls(None) == []
+    assert service.parse_search_urls("") == []
+    assert service.parse_search_urls("https://a") == ["https://a"]
+    assert service.parse_search_urls("https://a https://b") == ["https://a", "https://b"]
+    assert service.parse_search_urls("https://a\nhttps://b | https://c") == [
+        "https://a", "https://b", "https://c"
+    ]
+    assert service.parse_search_urls(["https://a", " https://b "]) == ["https://a", "https://b"]
+    # カンマは区切り文字にしない（URL内に含まれ得るため）。
+    assert service.parse_search_urls("https://a?x=1,2") == ["https://a?x=1,2"]
+
+
+def test_run_cycle_multiple_search_urls_aggregates(patched):
+    """複数の検索URLを1サイクルで処理し、件数を合算する。"""
+    result = service.run_cycle(search_url="https://ex.com/s1 https://ex.com/s2")
+
+    # 検索URLは2件、パイプラインは使い回し(1インスタンス)で2回 run。
+    assert result["pipeline"]["search_urls"] == 2
+    assert len(FakePipeline.instances) == 1
+    assert len(FakePipeline.instances[0].run_calls) == 2
+    # 件数は各URLの合算（1URLあたり sent=2, processed=3）。
+    assert result["pipeline"]["sent"] == 4
+    assert result["pipeline"]["processed"] == 6
+    assert {s.search_url for s in patched["source"]} == {
+        "https://ex.com/s1", "https://ex.com/s2"
+    }
+    # 2URL目には既送信件数が sent_offset として渡る。
+    assert FakePipeline.instances[0].run_calls[1][2].get("sent_offset") == 2
 
 
 def test_run_cycle_closes_client_and_repo(patched):
