@@ -10,13 +10,23 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from .config import get_settings, scout_rules
+from .config import get_settings, project_root, scout_rules
 from .eligibility import check_eligibility
-from .generation.generator import ScoutGenerator
+from .generation.generator import ScoutGenerator, render_for_human
 from .ingest.base import CandidateSource
 from .logging_config import logger
 from .models import Candidate
 from .storage.repository import Repository
+
+
+def _export_scout(scout) -> None:
+    """生成したスカウトを data/exports/{会員番号}.md に書き出す（レビュー用）。"""
+    try:
+        out = project_root() / "data" / "exports"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{scout.member_no}.md").write_text(render_for_human(scout), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("文面のエクスポートに失敗: %s", e)
 
 
 @dataclass
@@ -132,6 +142,7 @@ class ScoutPipeline:
                 logger.error("文面生成に失敗: %s: %s", mno, e)
                 return
             self.repo.record_generated(scout, self.settings.resend_after_days)
+            _export_scout(scout)
             report.generated += 1
             subject, body = scout.first.subject, scout.first.body
             logger.info("文面生成完了: %s", mno)

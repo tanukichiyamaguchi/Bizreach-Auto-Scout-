@@ -1,0 +1,50 @@
+{
+  "mrccid": "TESTmrccid123",
+  "candidateId": "5838534",
+  "bizreachUserId": "BU5838534",
+  "candidateName": null,
+  "age": 34,
+  "gender": "Male",
+  "location": "J13",
+  "candidateClass": "HighClass",
+  "income": "Between750And1000",
+  "desiredConditions": { "income": "Upper1000" },
+  "industries": [{ "groupCode": "IG012", "code": "I0060", "yearsOfExperience": 10 }],
+  "companyExperiences": [
+    {
+      "companyName": { "ja": "株式会社リクルート", "en": null },
+      "positionName": { "ja": "法人営業マネージャー", "en": null },
+      "period": { "from": { "year": 2018, "month": 4 }, "to": null },
+      "employmentStatus": "Employed",
+      "companyCareers": [
+        {
+          "name": { "ja": "営業マネージャー", "en": null },
+          "period": { "from": { "year": 2018, "month": 4 }, "to": null },
+          "contents": { "ja": ["新規開拓で全社表彰2回。チーム6名のマネジメント。"], "en": [""] },
+          "isPresent": true
+        }
+      ]
+    },
+    {
+      "companyName": { "ja": "株式会社ABC商事", "en": null },
+      "positionName": { "ja": "営業", "en": null },
+      "period": { "from": { "year": 2014, "month": 4 }, "to": { "year": 2018, "month": 3 } },
+      "employmentStatus": "Resigned",
+      "companyCareers": []
+    }
+  ],
+  "educations": [
+    {
+      "schoolGrade": "Bachelors",
+      "name": { "ja": "早稲田大学", "en": "Waseda University" },
+      "department": { "ja": "商学部", "en": null },
+      "graduation": { "year": 2014, "month": 3 }
+    }
+  ],
+  "coreCompetencies": [{ "ja": "法人営業／8年：新規開拓と大型提案", "en": null }],
+  "qualifications": [{ "name": { "ja": "TOEIC 800", "en": null } }],
+  "awards": [{ "year": 2021, "title": { "ja": "MVP", "en": null } }],
+  "jobSummary": { "ja": "法人営業として新規開拓から大型提案まで一貫して担当。", "en": "" },
+  "specialInstruction": { "ja": "【自己PR】チームを率いて全社目標を達成しました。", "en": "" },
+  "intention": ["Hot", "Will"]
+}

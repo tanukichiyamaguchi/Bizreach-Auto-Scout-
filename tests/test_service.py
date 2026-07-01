@@ -98,7 +98,7 @@ def patched(monkeypatch):
     # ブラウザ系（service 内で遅延 import される）を差し替える。
     import bizreach_scout.bizreach.client as client_mod
     import bizreach_scout.bizreach.sender as sender_mod
-    import bizreach_scout.ingest.bizreach_source as source_mod
+    import bizreach_scout.ingest.bizreach_api_source as source_mod
 
     monkeypatch.setattr(client_mod, "BizreachClient", FakeClient)
 
@@ -114,7 +114,7 @@ def patched(monkeypatch):
         calls["source"].append(s)
         return s
 
-    monkeypatch.setattr(source_mod, "BizreachSource", fake_source_factory)
+    monkeypatch.setattr(source_mod, "BizreachApiSource", fake_source_factory)
 
     # kill switch は既定で無効（存在しないパス）にしておく。
     _disable_kill_switch(monkeypatch)

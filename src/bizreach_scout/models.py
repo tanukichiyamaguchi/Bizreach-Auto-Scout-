@@ -85,6 +85,7 @@ class Candidate(BaseModel):
 
     source: str = "manual"  # bizreach / csv / text / manual
     profile_url: str = ""
+    mrccid: str = ""  # ビズリーチ内部の候補者ID（API・スカウト送信に使用）
 
     def all_companies(self) -> list[str]:
         names = [self.current_company, *self.prior_companies]

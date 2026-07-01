@@ -35,9 +35,11 @@ def _build_source(source: str, input_path: str | None, search_url: str | None,
             raise click.UsageError("--input にテキストファイルを指定してください。")
         return TextSource.from_file(input_path)
     if source == "bizreach":
-        from .ingest.bizreach_source import BizreachSource
+        from .ingest.bizreach_api_source import BizreachApiSource
 
-        return BizreachSource(search_url=search_url, max_candidates=max_candidates, client=client)
+        return BizreachApiSource(
+            search_url=search_url, max_candidates=max_candidates, client=client
+        )
     raise click.UsageError(f"未知のソース: {source}")
 
 
