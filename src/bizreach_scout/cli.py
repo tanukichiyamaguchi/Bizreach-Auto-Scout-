@@ -203,6 +203,61 @@ def report() -> None:
     repo.close()
 
 
+@cli.command()
+@click.option("--headless/--no-headless", default=False,
+              help="既定はブラウザ表示（2FAを手動入力するため）")
+def login(headless: bool) -> None:
+    """ビズリーチに一度ログインしてセッション(storage_state)を保存する。
+
+    2段階認証はブラウザ上で手動入力してください。保存されたセッションファイルは、
+    GitHub Actions で運用する場合に secret(BIZREACH_STORAGE_STATE_B64)へ
+    base64 で登録すると、CI 上の自動ログイン/2FA を回避できます。
+    """
+    from .bizreach.client import BizreachClient
+
+    client = BizreachClient(headless=headless).start()
+    try:
+        client.ensure_logged_in()
+        path = client._storage_state_path()
+        click.echo(f"\nセッションを保存しました: {path}")
+        click.echo("GitHub Actions 用に base64 化するには:")
+        click.echo(f"  base64 -w0 {path}    # この出力を secret BIZREACH_STORAGE_STATE_B64 に登録")
+    finally:
+        client.close()
+
+
+@cli.command()
+def doctor() -> None:
+    """完全自動運用の起動前チェック（環境・設定・依存を点検）。"""
+    from .ops import format_report, overall_ok, run_checks
+
+    checks = run_checks()
+    click.echo(format_report(checks))
+    raise SystemExit(0 if overall_ok(checks) else 1)
+
+
+@cli.command()
+@click.option("--search-url", help="bizreach の検索結果URL（保存検索）。未指定なら再送のみ")
+@click.option("--interval", default=86400, help="サイクル間隔（秒）。既定は1日(86400)")
+@click.option("--max", "max_candidates", default=50, help="1サイクルの最大処理件数")
+@click.option("--headless/--no-headless", default=True, help="ブラウザをヘッドレスで起動")
+@click.option("--once", is_flag=True, help="1サイクルだけ実行して終了")
+def serve(search_url: str | None, interval: int, max_candidates: int,
+          headless: bool, once: bool) -> None:
+    """取り込み→生成→送信→再送を一定間隔で自動実行する常駐サービス。"""
+    from .service import serve as _serve
+
+    if get_settings().dry_run:
+        click.echo("※ DRY_RUN 有効: 文面は入力しますが実送信は行いません（.env の BIZSCOUT_DRY_RUN）。")
+    _serve(
+        search_url=search_url,
+        interval=interval,
+        max_candidates=max_candidates,
+        headless=headless,
+        once=once,
+    )
+
+
 def main() -> None:
     cli()
 

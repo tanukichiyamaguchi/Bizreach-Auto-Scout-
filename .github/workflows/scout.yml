@@ -1,0 +1,128 @@
+# =============================================================
+#  ビズリーチ自動スカウト（GitHub Actions 実行）
+#  - 手動実行(workflow_dispatch)と定期実行(schedule)に対応
+#  - 既定は DRY_RUN（実送信しない）。本番は dry_run=false を明示
+#  - 状態(DB・セッション)は actions/cache で実行間に保持
+#  詳細は docs/GitHub Actionsで運用.md を参照
+# =============================================================
+name: scout
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "実送信しない(true)/本番送信(false)"
+        type: choice
+        options: ["true", "false"]
+        default: "true"
+      search_url:
+        description: "ビズリーチ保存検索の結果URL（複数可: 半角スペースか | で区切る。空なら再送のみ）"
+        type: string
+        default: ""
+      max:
+        description: "1回の最大処理件数"
+        type: string
+        default: "30"
+  schedule:
+    # 毎日 09:00 JST（00:00 UTC）。定期実行は repo variables の設定値を使う。
+    - cron: "0 0 * * *"
+
+# 同時実行を禁止して二重送信を防ぐ（キューイング）。
+concurrency:
+  group: bizscout-scout
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      BIZREACH_EMAIL: ${{ secrets.BIZREACH_EMAIL }}
+      BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
+      BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-4-8' }}
+      BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '20' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      # --- 実行間で状態(DB・ログイン セッション)を保持 ---
+      # 注意: actions/cache は最善努力。長期間未実行や容量超過で消えると
+      #       重複判定/再送スケジュールがリセットされる（重複送信リスク）。
+      - name: Restore state (data/)
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: bizscout-data-${{ github.run_id }}
+          restore-keys: |
+            bizscout-data-
+
+      # --- 設定の解決（手動入力 or repo variables）---
+      - name: Resolve run config
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "BIZSCOUT_DRY_RUN=${{ inputs.dry_run }}" >> "$GITHUB_ENV"
+            echo "SEARCH_URL=${{ inputs.search_url }}" >> "$GITHUB_ENV"
+            echo "RUN_MAX=${{ inputs.max }}" >> "$GITHUB_ENV"
+          else
+            echo "BIZSCOUT_DRY_RUN=${{ vars.BIZSCOUT_DRY_RUN || 'true' }}" >> "$GITHUB_ENV"
+            echo "SEARCH_URL=${{ vars.BIZSCOUT_SEARCH_URL }}" >> "$GITHUB_ENV"
+            echo "RUN_MAX=${{ vars.BIZSCOUT_MAX || '30' }}" >> "$GITHUB_ENV"
+          fi
+
+      # --- ログイン セッションを secret から復元（2FA/bot検知回避に推奨）---
+      - name: Seed Bizreach session
+        env:
+          STATE_B64: ${{ secrets.BIZREACH_STORAGE_STATE_B64 }}
+        run: |
+          if [ -n "$STATE_B64" ]; then
+            mkdir -p data/sessions
+            echo "$STATE_B64" | base64 -d > data/sessions/bizreach_state.json
+            echo "保存済みセッションを復元しました。"
+          else
+            echo "セッション secret 未設定。cache のセッション、または email/password ログインに依存します。"
+          fi
+
+      - name: Preflight (doctor)
+        continue-on-error: true
+        run: bizscout doctor
+
+      - name: Run scout (1サイクル)
+        run: |
+          echo "DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX / SEARCH_URL set: $([ -n "$SEARCH_URL" ] && echo yes || echo no)"
+          if [ -n "$SEARCH_URL" ]; then
+            bizscout serve --once --max "$RUN_MAX" --search-url "$SEARCH_URL"
+          else
+            bizscout serve --once --max "$RUN_MAX"
+          fi
+
+      - name: Status report
+        if: always()
+        run: bizscout report || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bizscout-logs-${{ github.run_id }}
+          path: |
+            logs/
+            data/exports/
+          if-no-files-found: ignore
+          retention-days: 14

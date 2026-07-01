@@ -1,0 +1,32 @@
+# =============================================================
+#  Bizreach Auto Scout — 再送サービス（oneshot）
+# -------------------------------------------------------------
+#  bizscout-resends.timer から起動される単発実行ユニット。
+#  初回送信から BIZSCOUT_RESEND_AFTER_DAYS 日後の候補へ再送して終了する。
+#
+#  設置方法（ユーザー単位の例）:
+#    cp deploy/systemd/bizscout-resends.* ~/.config/systemd/user/
+#    systemctl --user daemon-reload
+#    systemctl --user enable --now bizscout-resends.timer
+#
+#  ★まずは検証★ 本番送信の前に .env で BIZSCOUT_DRY_RUN=true にして
+#    `systemctl --user start bizscout-resends.service` で動作とログを確認すること。
+#  緊急停止は kill switch（data/state/STOP）の作成で行う。
+# =============================================================
+[Unit]
+Description=Bizreach Auto Scout - 期限到来分の再送
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# プロジェクトのルート（各自の配置に書き換える）。
+WorkingDirectory=/home/youruser/Bizreach-Auto-Scout-
+# 環境変数は .env から読み込む。
+EnvironmentFile=/home/youruser/Bizreach-Auto-Scout-/.env
+# .venv の bizscout を直接実行する。
+ExecStart=/home/youruser/Bizreach-Auto-Scout-/.venv/bin/bizscout run-resends
+Restart=no
+
+[Install]
+WantedBy=default.target

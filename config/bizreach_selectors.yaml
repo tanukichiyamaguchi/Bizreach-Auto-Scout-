@@ -1,0 +1,30 @@
+# =============================================================
+#  ビズリーチ セレクタ設定（実画面に合わせた上書き）
+#  空の項目は src/bizreach_scout/bizreach/selectors.py の既定値を使用。
+#  ログイン欄は実画面(cr-support.jp/login/)から確認済み。
+#  検索結果・スカウト送信のセレクタは実画面を確認しながら順次追記する。
+# =============================================================
+
+# --- URL ---
+login_url: "https://cr-support.jp/login/"
+base_url: "https://cr-support.jp/"
+
+# --- ログイン（実画面から確認済み）---
+login_email: "input[name='mailAddress']"
+login_password: "input[name='password']"
+# ログインボタン（要最終確認）。複数候補は先頭を使用。
+login_submit: "#jsi_form input[type='submit'], #jsi_form button"
+# ログイン成功の判定要素（要調整。ログイン後に必ず表示される要素へ）。
+logged_in_marker: "text=ログアウト"
+
+# --- 検索結果（後で追記）---
+# result_link: ""
+# next_page: ""
+
+# --- スカウト送信（後で追記）---
+# scout_button: ""
+# scout_subject: ""
+# scout_body: ""
+# scout_send: ""
+# scout_confirm: ""
+# scout_sent_marker: ""

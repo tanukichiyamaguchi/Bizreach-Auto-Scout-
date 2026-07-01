@@ -1,0 +1,34 @@
+# =============================================================
+#  Bizreach Auto Scout — 新規候補の取り込み・初回送信サービス（oneshot）
+# -------------------------------------------------------------
+#  bizscout-run.timer から起動される単発実行ユニット。
+#  取り込み→生成→初回送信を1回実行して終了する。
+#
+#  設置方法（ユーザー単位の例）:
+#    cp deploy/systemd/bizscout-run.* ~/.config/systemd/user/
+#    systemctl --user daemon-reload
+#    systemctl --user enable --now bizscout-run.timer
+#
+#  ★まずは検証★ 本番送信の前に .env で BIZSCOUT_DRY_RUN=true にして
+#    `systemctl --user start bizscout-run.service` で動作とログを確認すること。
+#  緊急停止は kill switch（data/state/STOP）の作成で行う。
+# =============================================================
+[Unit]
+Description=Bizreach Auto Scout - 新規候補の取り込み・初回送信
+# ネットワークが利用可能になってから実行する。
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# プロジェクトのルート（各自の配置に書き換える）。
+WorkingDirectory=/home/youruser/Bizreach-Auto-Scout-
+# 環境変数は .env から読み込む（WorkingDirectory からの相対）。
+EnvironmentFile=/home/youruser/Bizreach-Auto-Scout-/.env
+# .venv の bizscout を直接実行する。--search-url は保存済み検索のURLを指定する。
+ExecStart=/home/youruser/Bizreach-Auto-Scout-/.venv/bin/bizscout run --source bizreach --search-url "https://cr-support.jp/search/saved/xxxx"
+# 失敗しても次回タイマーに任せる（再起動ループを避ける）。
+Restart=no
+
+[Install]
+WantedBy=default.target

@@ -73,13 +73,20 @@ class ScoutPipeline:
         hi = max(self.settings.send_delay_max, lo)
         time.sleep(random.uniform(lo, hi))
 
-    def run(self, source: CandidateSource, send: bool = True) -> PipelineReport:
+    def run(
+        self, source: CandidateSource, send: bool = True, sent_offset: int = 0
+    ) -> PipelineReport:
+        """1つの検索ソースを処理する。
+
+        sent_offset は同一サイクルで既に送信済みの件数。複数検索URLをまたいでも
+        1実行あたりの送信上限(max_sends_per_run)を守るために使う。
+        """
         report = PipelineReport()
         on_ineligible = self.rules.get("eligibility", {}).get("on_ineligible", "skip")
 
         for candidate in source:
             report.processed += 1
-            self._process_one(candidate, send, on_ineligible, report)
+            self._process_one(candidate, send, on_ineligible, report, sent_offset)
 
         logger.info("\n%s", report.summary())
         return report
@@ -90,6 +97,7 @@ class ScoutPipeline:
         send: bool,
         on_ineligible: str,
         report: PipelineReport,
+        sent_offset: int = 0,
     ) -> None:
         mno = candidate.member_no
         elig = check_eligibility(candidate, self.rules)
@@ -131,7 +139,7 @@ class ScoutPipeline:
         # --- 初回送信 ---
         if not (send and self.sender is not None):
             return
-        if (report.sent + report.dry_run) >= self.settings.max_sends_per_run:
+        if (sent_offset + report.sent + report.dry_run) >= self.settings.max_sends_per_run:
             logger.info("1回あたりの送信上限(%d)に達したため送信スキップ: %s",
                         self.settings.max_sends_per_run, mno)
             self.repo.mark_skipped(mno, "first", "max_sends_per_run reached")

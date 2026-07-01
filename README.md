@@ -82,13 +82,41 @@ cron 例（毎朝9時）:
 0 9 * * *  cd /path/to/repo && .venv/bin/bizscout run-resends >> logs/resend.log 2>&1
 ```
 
-### 4. その他
+### 4. 完全自動運用（常駐・定期実行）
+
+```bash
+bizscout doctor    # 起動前チェック（APIキー/認証/セレクタ/DB/Playwright等）。失敗で終了コード1
+bizscout serve --search-url "https://cr-support.jp/search?saved=..." --interval 86400
+#   → 取り込み→生成→送信→再送 を interval 秒ごとに自動実行（kill switchで即停止可）
+bizscout serve --search-url "..." --once   # 1サイクルだけ実行
+```
+
+定期実行は `bizscout serve`（常駐）のほか、cron / systemd / Docker でも運用できます。手順は **[docs/運用手順.md](docs/運用手順.md)** と **[deploy/](deploy/)** を参照してください。
+
+### 5. その他
 
 ```bash
 bizscout preview BU3765516           # 保存済みスカウトを表示
 bizscout report                      # 送信状況・要確認候補者の一覧
 bizscout import-consultants path/to/consultant_profiles_v2.docx
 ```
+
+---
+
+## 自動運用・デプロイ
+
+完全自動運用（使い方B）のためのドキュメントと資材を用意しています。
+
+| ファイル | 内容 |
+|---|---|
+| [docs/運用手順.md](docs/運用手順.md) | インストール→`.env`→セレクタ→`doctor`→ドライラン→本番送信→定期実行 までの手順 |
+| [docs/セレクタ設定ガイド.md](docs/セレクタ設定ガイド.md) | ビズリーチ実画面のセレクタを開発者ツールで特定し `bizreach_selectors.yaml` に設定する方法 |
+| [docs/トラブルシューティング.md](docs/トラブルシューティング.md) | ログイン失敗・送信されない・再送が走らない等の対処 |
+| [docs/GitHub Actionsで運用.md](docs/GitHub%20Actions%E3%81%A7%E9%81%8B%E7%94%A8.md) | **サーバー不要**。GitHub Actions をスケジューラ兼実行環境にする手順（`.github/workflows/scout.yml`） |
+| [Dockerfile](Dockerfile) / [docker-compose.yml](docker-compose.yml) | Playwright同梱イメージでの常駐運用 |
+| [deploy/](deploy/) | cron 例・systemd unit/timer・Windowsタスクスケジューラの案内 |
+
+> 実運用前に必ず `bizscout doctor` で環境を点検し、まず `BIZSCOUT_DRY_RUN=true` で文面を検証してください。
 
 ---
 
@@ -159,20 +187,25 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
-ネットワーク不要（Anthropic クライアントはモック）で 44 ケースが通ります。
+ネットワーク不要（Anthropic クライアントはモック）で全ケースが通ります。
 
 ---
 
 ## ディレクトリ構成
 
 ```
-config/            企業情報・ルール・プロンプト・コンサルデータ
+config/            企業情報・ルール・プロンプト・コンサルデータ・セレクタ
 src/bizreach_scout/
   ├─ generation/   プロンプト構築・Claude生成・固定要素組み立て・検証
   ├─ ingest/       CSV / 貼り付けテキスト / ビズリーチ の取り込み
   ├─ bizreach/     Playwright（ログイン・検索・プロフィール・送信）
   ├─ storage/      SQLite（重複防止・再送スケジュール・監査）
+  ├─ ops.py        起動前チェック（bizscout doctor）
+  ├─ service.py    常駐・定期実行（bizscout serve）
   ├─ eligibility.py / consultants.py / pipeline.py / scheduler.py / cli.py
+docs/              運用手順・セレクタ設定ガイド・トラブルシューティング
+deploy/            cron / systemd の例
+Dockerfile / docker-compose.yml   コンテナ運用
 examples/          サンプルCSV・プロフィール
 tests/             ユニットテスト
 ```
