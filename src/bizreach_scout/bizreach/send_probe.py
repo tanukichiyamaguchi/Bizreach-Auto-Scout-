@@ -43,6 +43,7 @@ class SendProbe:
         self.summary: list[str] = []
         self.posts: list[tuple[str, dict, str]] = []
         self.blocked: list[tuple[str, dict, str]] = []
+        self.all_reqs: list[tuple[str, str]] = []  # (method, url) 全 /api/ リクエスト
         self._arm_block = False
 
     # --- 補助 -----------------------------------------------------------------
@@ -60,6 +61,15 @@ class SendProbe:
 
     def _install_capture(self, page) -> None:
         """/api/ への POST を記録。ブロック武装中は abort して実送信を防ぐ。"""
+
+        def on_request(req):
+            try:
+                if "/api/" in req.url:
+                    self.all_reqs.append((req.method, req.url))
+            except Exception:  # noqa: BLE001
+                pass
+
+        page.on("request", on_request)
 
         def handler(route):
             req = route.request
@@ -226,12 +236,24 @@ class SendProbe:
         else:
             self._log("送信POSTを捕捉できませんでした（送信ボタン未到達の可能性）。")
 
-        # 全 POST の一覧（参考）。
+        # 全 POST の本文（参考）。
         if self.posts:
             lines = []
             for url, _headers, pd in self.posts:
                 lines.append(f"POST {url}\n{pd[:4000]}\n{'-'*60}")
             (self.out / "probe_posts.txt").write_text("\n".join(lines), encoding="utf-8")
+
+        # フロー全体で観測した /api/ リクエスト一覧（GET含む。送信画面のロード経路把握用）。
+        if self.all_reqs:
+            seen = set()
+            lines = []
+            for method, url in self.all_reqs:
+                key = (method, url.split("?")[0])
+                if key in seen:
+                    continue
+                seen.add(key)
+                lines.append(f"{method}\t{url}")
+            (self.out / "probe_api_requests.txt").write_text("\n".join(lines), encoding="utf-8")
 
         (self.out / "probe_summary.txt").write_text("\n".join(self.summary), encoding="utf-8")
         self._log("偵察を終了しました。")

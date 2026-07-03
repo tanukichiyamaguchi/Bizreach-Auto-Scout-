@@ -16,9 +16,13 @@ class _FakeSel:
 class _FakePage:
     def __init__(self):
         self.handler = None
+        self.listeners = {}
 
     def route(self, _pattern, handler):
         self.handler = handler
+
+    def on(self, event, cb):
+        self.listeners[event] = cb
 
 
 class _FakeClient:
