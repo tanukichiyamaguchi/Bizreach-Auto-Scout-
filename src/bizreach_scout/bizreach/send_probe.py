@@ -151,7 +151,8 @@ class SendProbe:
                 js = self._req_get(url)
                 if not js:
                     continue
-                for m in re.findall(r'[`"\']/api/v2/[^`"\'\s]+', js):
+                # /api/v2/... と、内部表記の path:"/v2/..." の両方を拾う。
+                for m in re.findall(r'[`"\']/(?:api/)?v2/[^`"\'\s]+', js):
                     endpoints.add(m.strip('`"\''))
                 # scout/message/offer を含む前後を文脈保存（payload推定用）。
                 for m in re.finditer(r'.{0,80}(scout|Scout|platinum|Platinum|offer|Offer|'

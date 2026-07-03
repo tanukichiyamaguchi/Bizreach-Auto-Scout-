@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Iterator
@@ -273,18 +274,49 @@ class BizreachApi:
         return resume_to_candidate(resume, mrccid)
 
     # --- スカウト送信 --------------------------------------------------------
-    # フロントJS(sendScoutCandidates)から判明したAPI契約:
+    # フロントJS(sendScoutCandidates / sendScout(platinum))から判明したAPI契約:
     #   事前確認: POST /api/v2/scouts/checkCandidates  body={jobId, mrccids}
-    #   送信:     POST /api/v2/scouts/candidates
-    #             header x-idempotency-key(必須), 任意 x-search-id / x-screen-type
+    #             → {candidates:[{mrccid, error, data}], errors}
+    #   通常送信: POST /api/v2/scouts/candidates
     #             body={subject, body, dryRun, jobId, mrccids[], isReservation,
-    #                   reminder, oneTimeToken}
-    # dryRun=True を指定すると、実送信せずにサーバ側の検証のみ行える（安全確認用）。
+    #                   reminder, oneTimeToken}（oneTimeToken必要）
+    #   プラチナ: POST /api/v2/scouts/platinum
+    #             body={subject, body, dryRun, jobId, mrccid, isReservation,
+    #                   reminder}（単数mrccid・oneTimeToken不要）
+    #   共通: header Content-Type:application/json, x-idempotency-key(必須),
+    #         任意 x-search-id / x-screen-type。認証はセッションcookie。
+    # dryRun=True で実送信せずサーバ側検証のみ（安全確認用）。
+    # 会員種別の振り分けは checkCandidates の error に基づく（ClassMismatch→プラチナ）。
+
+    # 検索由来の送信であることを示す画面種別（JSのScreenType enumより）。
+    SCREEN_TYPE_SAVED = "resume_search_with_saved_condition"
+
+    @staticmethod
+    def _reminder_obj(reminder: dict | None) -> dict | None:
+        """reminderは null か {daysAfter, subject, body}（daysAfter∈ThreeDays等）。
+        誤って文字列が来た場合は None に落として型不一致(400)を防ぐ。"""
+        return reminder if isinstance(reminder, dict) else None
+
+    def _post_json(self, path: str, payload: dict, extra_headers: dict) -> dict:
+        headers = {"Content-Type": "application/json", **extra_headers}
+        # 明示的にJSON文字列化（非ASCIIをそのまま送る）。dictでも可だが曖昧さを排除。
+        resp = self._req.post(f"{self.base}{path}", headers=headers,
+                              data=json.dumps(payload, ensure_ascii=False))
+        out = {"status": resp.status}
+        try:
+            out.update(resp.json())
+        except Exception:  # noqa: BLE001
+            out["text"] = resp.text()[:2000]
+        return out
 
     def create_one_time_token(self) -> str | None:
-        """送信用のワンタイムトークンを取得する（必要な場合）。パスは複数候補を試行。"""
+        """送信用ワンタイムトークンを取得する（通常送信で必要）。
+
+        注: 生成エンドポイントのパスはフロントJSのバンドルに現れず未確定。
+        判明している候補パスを順に試す。取得できなければ None。
+        """
         for path in ("/api/v2/oneTimeTokens", "/api/v2/scouts/oneTimeTokens",
-                     "/api/v2/oneTimeToken"):
+                     "/api/v2/oneTimeToken", "/api/v2/scouts/oneTimeToken"):
             try:
                 resp = self._req.post(f"{self.base}{path}", data={})
                 if resp.status in (200, 201):
@@ -296,64 +328,98 @@ class BizreachApi:
                         return token
             except Exception:  # noqa: BLE001
                 continue
-        logger.info("ワンタイムトークンは取得できませんでした（不要の可能性）。")
+        logger.info("ワンタイムトークンを取得できませんでした（通常送信は不可の可能性）。")
         return None
 
     def check_candidates(self, job_id: str, mrccids: list[str]) -> dict:
         """送信前チェック。候補者が送信可能か検証する。"""
-        body = {"jobId": job_id, "mrccids": mrccids}
         try:
-            resp = self._req.post(f"{self.base}/api/v2/scouts/checkCandidates",
-                                  headers={"Content-Type": "application/json"}, data=body)
-            out = {"status": resp.status}
-            try:
-                out.update(resp.json())
-            except Exception:  # noqa: BLE001
-                out["text"] = resp.text()[:2000]
-            return out
+            return self._post_json("/api/v2/scouts/checkCandidates",
+                                   {"jobId": job_id, "mrccids": mrccids}, {})
         except Exception as e:  # noqa: BLE001
             logger.warning("送信前チェックで例外: %s", e)
             return {"status": 0, "error": str(e)}
 
     def send_scout(self, job_id: str, mrccid: str, subject: str, body: str,
                    dry_run: bool = True, search_id: str | None = None,
-                   reminder: str | None = None,
+                   reminder: dict | None = None,
                    one_time_token: str | None = None) -> dict:
-        """スカウトを送信する（dry_run=Trueで実送信せず検証のみ）。
-
-        戻り値は {"status": HTTPコード, ...レスポンス} 。status==200 で成功。
-        """
-        headers = {
-            "Content-Type": "application/json",
-            "x-idempotency-key": str(uuid.uuid4()),  # 二重送信防止（必須）
-        }
+        """通常スカウトを送信する（POST /api/v2/scouts/candidates・oneTimeToken必要）。"""
+        headers = {"x-idempotency-key": str(uuid.uuid4()),
+                   "x-screen-type": self.SCREEN_TYPE_SAVED}
         if search_id:
             headers["x-search-id"] = search_id
         payload = {
-            "subject": subject,
-            "body": body,
-            "dryRun": dry_run,
-            "jobId": job_id,
-            "mrccids": [mrccid],
-            "isReservation": False,
-            "reminder": reminder,          # ThreeDays/FiveDays/TenDays or None
+            "subject": subject, "body": body, "dryRun": dry_run,
+            "jobId": job_id, "mrccids": [mrccid], "isReservation": False,
+            "reminder": self._reminder_obj(reminder),
             "oneTimeToken": one_time_token,
         }
         try:
-            resp = self._req.post(f"{self.base}/api/v2/scouts/candidates",
-                                  headers=headers, data=payload)
-            out = {"status": resp.status}
-            try:
-                out.update(resp.json())
-            except Exception:  # noqa: BLE001
-                out["text"] = resp.text()[:2000]
-            if resp.status == 200:
-                logger.info("スカウト送信 %s mrccid=%s (dryRun=%s)",
-                            "検証OK" if dry_run else "完了", mrccid, dry_run)
-            else:
-                logger.warning("スカウト送信に失敗 mrccid=%s status=%s body=%s",
-                               mrccid, resp.status, out)
-            return out
+            out = self._post_json("/api/v2/scouts/candidates", payload, headers)
         except Exception as e:  # noqa: BLE001
             logger.error("スカウト送信で例外 mrccid=%s: %s", mrccid, e)
             return {"status": 0, "error": str(e)}
+        self._log_send_result("通常", mrccid, dry_run, out)
+        return out
+
+    def send_platinum_scout(self, job_id: str, mrccid: str, subject: str, body: str,
+                            dry_run: bool = True, search_id: str | None = None,
+                            reminder: dict | None = None) -> dict:
+        """プラチナスカウトを送信する（POST /api/v2/scouts/platinum・単数mrccid・token不要）。"""
+        headers = {"x-idempotency-key": str(uuid.uuid4()),
+                   "x-screen-type": self.SCREEN_TYPE_SAVED}
+        if search_id:
+            headers["x-search-id"] = search_id
+        payload = {
+            "subject": subject, "body": body, "dryRun": dry_run,
+            "jobId": job_id, "mrccid": mrccid, "isReservation": False,
+            "reminder": self._reminder_obj(reminder),
+        }
+        try:
+            out = self._post_json("/api/v2/scouts/platinum", payload, headers)
+        except Exception as e:  # noqa: BLE001
+            logger.error("プラチナ送信で例外 mrccid=%s: %s", mrccid, e)
+            return {"status": 0, "error": str(e)}
+        self._log_send_result("プラチナ", mrccid, dry_run, out)
+        return out
+
+    @staticmethod
+    def _log_send_result(kind: str, mrccid: str, dry_run: bool, out: dict) -> None:
+        if out.get("status") == 200:
+            logger.info("%sスカウト %s mrccid=%s (dryRun=%s)",
+                        kind, "検証OK" if dry_run else "完了", mrccid, dry_run)
+        else:
+            logger.warning("%sスカウト送信に失敗 mrccid=%s status=%s body=%s",
+                           kind, mrccid, out.get("status"), out)
+
+    def route_scout(self, job_id: str, mrccid: str, subject: str, body: str,
+                    dry_run: bool = True, search_id: str | None = None,
+                    reminder: dict | None = None) -> dict:
+        """会員種別に応じて通常/プラチナへ振り分けて送信する。
+
+        checkCandidates の error を見て振り分ける:
+          - error なし        → 通常スカウト（/candidates）
+          - ClassMismatch     → プラチナスカウト（/platinum）
+          - その他の error     → スキップ（既送信・対象外など）
+        戻り値に "endpoint" を付与する。
+        """
+        check = self.check_candidates(job_id, [mrccid])
+        err = None
+        for c in check.get("candidates", []) or []:
+            if c.get("mrccid") == mrccid:
+                err = c.get("error")
+                break
+        if err == "ClassMismatch":
+            out = self.send_platinum_scout(job_id, mrccid, subject, body,
+                                           dry_run, search_id, reminder)
+            out["endpoint"] = "platinum"
+        elif err:
+            logger.info("送信不可のためスキップ mrccid=%s error=%s", mrccid, err)
+            out = {"status": 0, "skipped": err, "endpoint": "skip"}
+        else:
+            token = self.create_one_time_token()
+            out = self.send_scout(job_id, mrccid, subject, body,
+                                  dry_run, search_id, reminder, token)
+            out["endpoint"] = "candidates"
+        return out
