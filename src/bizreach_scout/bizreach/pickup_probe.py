@@ -48,14 +48,13 @@ class PickupProbe:
             pass
         self.client.human_delay(2.0, 4.0)
 
-        # 「本日のピックアップ」タブを明示的に押す（既定でも念のため）。
-        for label in ("本日のピックアップ", "ピックアップ"):
+        # タブを行き来して各セクションのfetchを強制発火させる（既定タブは再fetchされない）。
+        for label in ("再スカウト候補", "本日のピックアップ", "ピックアップ"):
             try:
                 loc = page.get_by_text(label, exact=False)
                 if loc.count() > 0:
                     loc.first.click(timeout=3000)
                     self.client.human_delay(1.5, 3.0)
-                    break
             except Exception:  # noqa: BLE001
                 continue
         try:
@@ -64,7 +63,37 @@ class PickupProbe:
             pass
         self.client.human_delay(1.0, 2.0)
 
+        # 直接プローブ: /api/v1/frontend/mypage/{名前}/search を推定パスで叩く。
+        self._probe_endpoints(page)
+
         self._dump(page, requests, responses)
+
+    def _probe_endpoints(self, page) -> None:
+        """ピックアップ候補者リストの推定エンドポイントを直接叩いて特定する。"""
+        names = [
+            "pickup", "pickup-scout", "pickup-scout-candidate", "pickup-candidate",
+            "pickup-scout-job", "daily-pickup", "daily-pickup-scout-candidate",
+            "scout-candidate", "recommend-scout-candidate", "recommended-candidate",
+            "hot-scout-candidate", "hot-scout", "matching-scout-candidate",
+        ]
+        summary = []
+        idx = 0
+        for name in names:
+            url = f"{self.base}/api/v1/frontend/mypage/{name}/search"
+            try:
+                resp = page.request.post(url, headers={"Content-Type": "application/json"},
+                                         data='{"fetchSize":50}')
+                body = resp.text()
+                summary.append(f"POST {resp.status} {len(body)}B {url}")
+                if resp.status == 200 and body.strip().startswith(("{", "[")):
+                    (self.out / f"pickup_probe_{idx:02d}.json").write_text(
+                        body[:2_000_000], encoding="utf-8")
+                    summary[-1] += f"  -> pickup_probe_{idx:02d}.json"
+                    idx += 1
+            except Exception as e:  # noqa: BLE001
+                summary.append(f"POST ERR {url} {e}")
+        (self.out / "pickup_probe_result.txt").write_text("\n".join(summary), encoding="utf-8")
+        logger.info("[pickup] 推定エンドポイント探索: 成功 %d 件。", idx)
 
     def _dump(self, page, requests, responses) -> None:
         # リクエスト一覧（method + url + body）。
