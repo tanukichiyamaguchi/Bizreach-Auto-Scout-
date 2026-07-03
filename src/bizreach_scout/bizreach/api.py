@@ -98,8 +98,14 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     university = ""
     edus = resume.get("educations") or []
     if edus:
-        education = _GRADE_MAP.get(edus[0].get("schoolGrade", ""), Education.unknown)
+        raw_grade = edus[0].get("schoolGrade", "")
+        education = _GRADE_MAP.get(raw_grade, Education.unknown)
         university = _ja(edus[0].get("name"))
+        # 学歴レコードはあるのに未マッピングで不明になる＝_GRADE_MAP の取りこぼし。
+        # 本当に空欄(edus 自体が無い)のか、値が未対応なのかをログで切り分ける。
+        if education is Education.unknown and raw_grade:
+            logger.info("未マッピングの学歴グレード: %r（mrccid=%s 大学=%s）",
+                        raw_grade, mrccid or member_no, university)
 
     # --- 職歴 ---
     companies = resume.get("companyExperiences") or []
