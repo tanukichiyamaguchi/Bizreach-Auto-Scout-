@@ -18,6 +18,13 @@ from .logging_config import logger
 from .models import Candidate
 from .storage.repository import Repository
 
+_REMINDER_DAYS = {3: "ThreeDays", 5: "FiveDays", 10: "TenDays"}
+
+
+def _reminder_days_after(days: int) -> str:
+    """reminder の daysAfter（ThreeDays/FiveDays/TenDays）に丸める。"""
+    return _REMINDER_DAYS.get(days, "FiveDays")
+
 
 def _export_scout(scout) -> None:
     """生成したスカウトを data/exports/{会員番号}.md に書き出す（レビュー用）。"""
@@ -83,6 +90,19 @@ class ScoutPipeline:
         hi = max(self.settings.send_delay_max, lo)
         time.sleep(random.uniform(lo, hi))
 
+    def _build_reminder(self, resend_subject: str, resend_body: str) -> dict | None:
+        """初回送信に添付する追客(reminder)を組み立てる。無効設定/内容欠如なら None。"""
+        cfg = self.rules.get("resend", {})
+        if not cfg.get("use_native_reminder", True):
+            return None
+        if not (resend_subject and resend_body):
+            return None
+        return {
+            "daysAfter": _reminder_days_after(self.settings.resend_after_days),
+            "subject": resend_subject,
+            "body": resend_body,
+        }
+
     def run(
         self, source: CandidateSource, send: bool = True, sent_offset: int = 0
     ) -> PipelineReport:
@@ -131,6 +151,9 @@ class ScoutPipeline:
         existing = self.repo.get_scout(mno, "first")
         if existing is not None:
             subject, body = existing["subject"], existing["body"]
+            resend_row = self.repo.get_scout(mno, "resend")
+            resend_subject = resend_row["subject"] if resend_row else ""
+            resend_body = resend_row["body"] if resend_row else ""
             report.reused += 1
             logger.info("生成済み文面を再利用: %s", mno)
         else:
@@ -145,6 +168,7 @@ class ScoutPipeline:
             _export_scout(scout)
             report.generated += 1
             subject, body = scout.first.subject, scout.first.body
+            resend_subject, resend_body = scout.resend.subject, scout.resend.body
             logger.info("文面生成完了: %s", mno)
 
         # --- 初回送信 ---
@@ -156,11 +180,17 @@ class ScoutPipeline:
             self.repo.mark_skipped(mno, "first", "max_sends_per_run reached")
             return
 
-        outcome = self.sender.send_scout(candidate, subject, body)
+        # 再送はビズリーチ標準の追客(reminder)で初回送信時に予約（設定で切替可）。
+        reminder = self._build_reminder(resend_subject, resend_body)
+        outcome = self.sender.send_scout(candidate, subject, body, reminder=reminder)
         if outcome.status == "sent":
             self.repo.mark_sent(mno, "first", self.settings.resend_after_days)
+            if reminder:
+                # ビズリーチ側が5日後に自動追客するため、独自再送は行わない（二重送信防止）。
+                self.repo.mark_skipped(mno, "resend", "native_reminder(ビズリーチ追客で自動送信)")
             report.sent += 1
-            logger.info("初回送信完了: %s", mno)
+            logger.info("初回送信完了: %s%s", mno,
+                        "（5日後の追客も予約済み）" if reminder else "")
             self._send_delay()
         elif outcome.status == "dry_run":
             # 実送信していないので generated のまま（後で本番送信できる）。

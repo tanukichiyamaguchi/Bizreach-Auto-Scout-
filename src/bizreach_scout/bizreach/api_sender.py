@@ -27,7 +27,8 @@ class ApiScoutSender:
     def _kill_switch_active(self) -> bool:
         return self.settings.kill_switch_path.exists()
 
-    def send_scout(self, candidate: Candidate, subject: str, body: str) -> SendOutcome:
+    def send_scout(self, candidate: Candidate, subject: str, body: str,
+                   reminder: dict | None = None) -> SendOutcome:
         if self._kill_switch_active():
             logger.warning("kill switch が有効です。送信を中止します。")
             return SendOutcome("blocked", "kill switch active")
@@ -37,7 +38,8 @@ class ApiScoutSender:
             return SendOutcome("failed", "scout_job_id が未設定（company.yaml を確認）")
 
         result = self.api.route_scout(
-            self.job_id, candidate.mrccid, subject, body, dry_run=self.dry_run
+            self.job_id, candidate.mrccid, subject, body,
+            dry_run=self.dry_run, reminder=reminder,
         )
         endpoint = result.get("endpoint")
         status = result.get("status")

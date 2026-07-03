@@ -69,6 +69,10 @@ resend:
   after_days: 5               # 初回送信から5日後
   length_ratio: 0.5           # 初回の約1/2の文章量
   max_consultant_mentions: 1  # 共通点コンサルタントへの言及は数を絞る
+  # 再送の方式。true: ビズリーチ標準の追客(reminder)を初回送信時に予約（推奨・確実）。
+  #             false: 独自スケジュールで5日後に別スカウトとして送る（既送信で弾かれる恐れ）。
+  # reminderのdaysAfterは3/5/10のみ対応。after_days がこれ以外なら FiveDays に丸める。
+  use_native_reminder: true
 
 # --- 文面の固定ルール（バリデーションに使用）--------------------------------
 constraints:

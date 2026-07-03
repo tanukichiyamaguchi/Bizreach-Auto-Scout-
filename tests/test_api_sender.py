@@ -12,8 +12,9 @@ class FakeApi:
         self.result = result
         self.calls = []
 
-    def route_scout(self, job_id, mrccid, subject, body, dry_run=True):
-        self.calls.append({"job_id": job_id, "mrccid": mrccid, "dry_run": dry_run})
+    def route_scout(self, job_id, mrccid, subject, body, dry_run=True, reminder=None):
+        self.calls.append({"job_id": job_id, "mrccid": mrccid,
+                           "dry_run": dry_run, "reminder": reminder})
         return dict(self.result)
 
 

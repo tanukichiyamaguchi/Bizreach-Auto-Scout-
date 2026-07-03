@@ -71,7 +71,13 @@ def run_due_resends(repo: Repository, sender, now: datetime | None = None) -> Re
             logger.info("[DRY-RUN] 再送を模擬: %s", mno)
         elif outcome.status == "blocked":
             report.skipped += 1
-            logger.warning("再送ブロック: %s", mno)
+            if outcome.detail.startswith("skipped:"):
+                # 既送信・対象外など終了状態。毎日のリトライを避けるため skipped にする。
+                repo.mark_skipped(mno, "resend", outcome.detail)
+                logger.warning("再送スキップ（%s）: %s", outcome.detail, mno)
+            else:
+                # kill switch 等の一時的ブロックは状態を保持し次回リトライ。
+                logger.warning("再送ブロック（%s・次回リトライ）: %s", outcome.detail, mno)
         else:
             repo.mark_failed(mno, "resend", outcome.detail)
             report.failed += 1
