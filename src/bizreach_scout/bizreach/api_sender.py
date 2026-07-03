@@ -18,11 +18,14 @@ from .sender import SendOutcome
 
 
 class ApiScoutSender:
-    def __init__(self, api, job_id: str | None = None, dry_run: bool | None = None):
+    def __init__(self, api, job_id: str | None = None, dry_run: bool | None = None,
+                 pickup: bool = False):
         self.api = api
         self.settings = get_settings()
         self.job_id = job_id or scout_job_id()
         self.dry_run = self.settings.dry_run if dry_run is None else dry_run
+        # pickup=True の場合は無料枠(/v2/scouts/pickup)で送信（プラチナ残数を消費しない）。
+        self.pickup = pickup
 
     def _kill_switch_active(self) -> bool:
         return self.settings.kill_switch_path.exists()
@@ -37,10 +40,17 @@ class ApiScoutSender:
         if not self.job_id:
             return SendOutcome("failed", "scout_job_id が未設定（company.yaml を確認）")
 
-        result = self.api.route_scout(
-            self.job_id, candidate.mrccid, subject, body,
-            dry_run=self.dry_run, reminder=reminder,
-        )
+        if self.pickup:
+            # 無料枠のピックアップ送信（プラチナ残数を消費しない）。
+            result = self.api.send_pickup_scout(
+                self.job_id, candidate.mrccid, subject, body,
+                dry_run=self.dry_run, reminder=reminder,
+            )
+        else:
+            result = self.api.route_scout(
+                self.job_id, candidate.mrccid, subject, body,
+                dry_run=self.dry_run, reminder=reminder,
+            )
         endpoint = result.get("endpoint")
         status = result.get("status")
         detail = f"{endpoint} status={status}"

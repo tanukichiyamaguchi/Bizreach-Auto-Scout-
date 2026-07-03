@@ -134,6 +134,43 @@ def run(source: str, input_path: str | None, search_url: str | None,
         repo.close()
 
 
+@cli.command(name="run-pickup")
+@click.option("--kind", type=click.Choice(["job", "candidate", "both"]), default="job",
+              help="job=本日のピックアップ求人(本命) / candidate=ピックアップ候補者 / both")
+@click.option("--max", "max_candidates", default=20, help="最大処理件数")
+@click.option("--send/--no-send", default=True, help="送信を行うか")
+@click.option("--headless/--no-headless", default=True)
+def run_pickup(kind: str, max_candidates: int, send: bool, headless: bool) -> None:
+    """本日のピックアップ（無料枠・プラチナ残数を消費しない）へスカウト送信する。
+
+    mypageの freescout からレジュメを開いて mrccid を取得し、対象条件を満たす候補者だけに
+    /v2/scouts/pickup で送信する。条件外は従来どおりスキップ。
+    """
+    from .bizreach.api import BizreachApi
+    from .bizreach.api_sender import ApiScoutSender
+    from .bizreach.client import BizreachClient
+    from .ingest.bizreach_pickup_source import BizreachPickupSource
+    from .pipeline import ScoutPipeline
+
+    if send and get_settings().dry_run:
+        click.echo("※ DRY_RUN 有効: 文面は用意しますが実送信は行いません。")
+
+    repo = Repository()
+    client = None
+    try:
+        client = BizreachClient(headless=headless).start()
+        client.ensure_logged_in()
+        sender = ApiScoutSender(BizreachApi(client), pickup=True) if send else None
+        source = BizreachPickupSource(max_candidates=max_candidates, kind=kind, client=client)
+        pipeline = ScoutPipeline(repo=repo, sender=sender)
+        report = pipeline.run(source, send=send)
+        click.echo(report.summary())
+    finally:
+        if client:
+            client.close()
+        repo.close()
+
+
 @cli.command(name="run-resends")
 @click.option("--send/--no-send", default=True, help="再送を行うか")
 @click.option("--headless/--no-headless", default=True)

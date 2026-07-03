@@ -64,6 +64,33 @@ def test_http_error_returns_failed():
     assert out.status == "failed"
 
 
+class _PickupApi:
+    def __init__(self):
+        self.calls = []
+
+    def send_pickup_scout(self, job_id, mrccid, subject, body, dry_run=True, reminder=None):
+        self.calls.append(("pickup", mrccid, dry_run))
+        return {"status": 201, "endpoint": "pickup"}
+
+    def route_scout(self, *a, **k):
+        self.calls.append(("route",))
+        return {"status": 201, "endpoint": "platinum"}
+
+
+def test_pickup_mode_uses_pickup_endpoint():
+    api = _PickupApi()
+    out = ApiScoutSender(api, job_id="J", dry_run=False, pickup=True).send_scout(
+        _cand(), "s", "b")
+    assert out.status == "sent"
+    assert api.calls[0][0] == "pickup"      # /v2/scouts/pickup を使う
+
+
+def test_non_pickup_mode_uses_route():
+    api = _PickupApi()
+    ApiScoutSender(api, job_id="J", dry_run=True, pickup=False).send_scout(_cand(), "s", "b")
+    assert api.calls[0][0] == "route"
+
+
 def test_kill_switch_blocks_and_does_not_send(monkeypatch):
     api = FakeApi({"status": 201})
     s = ApiScoutSender(api, job_id="J", dry_run=True)
