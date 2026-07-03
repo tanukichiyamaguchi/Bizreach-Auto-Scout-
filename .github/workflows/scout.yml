@@ -24,9 +24,9 @@ on:
         type: string
         default: "30"
       mode:
-        description: "実行モード（scout / pickup=本日のピックアップ無料枠 / probe-* / test-send）"
+        description: "実行モード（scout / pickup / test-pickup-send=ピックアップ送信API検証 / probe-* / test-send）"
         type: choice
-        options: ["scout", "pickup", "probe-send", "test-send", "probe-pickup"]
+        options: ["scout", "pickup", "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
         default: "scout"
   schedule:
     # 毎日 09:00 JST（00:00 UTC）。定期実行は repo variables の設定値を使う。
@@ -166,6 +166,13 @@ jobs:
         run: |
           echo "本日のピックアップ求人へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN）。"
           bizscout run-pickup --kind job --max "$RUN_MAX"
+
+      # ピックアップ送信API(/v2/scouts/pickup)の dryRun 検証（対象条件を無視・実送信なし）。
+      - name: Test pickup send (dryRun・実送信なし)
+        if: env.RUN_MODE == 'test-pickup-send'
+        run: |
+          echo "ピックアップ送信APIを dryRun=True で検証します（実送信なし・残数消費なし）。"
+          bizscout test-pickup-send --kind job
 
       - name: Status report
         if: always()

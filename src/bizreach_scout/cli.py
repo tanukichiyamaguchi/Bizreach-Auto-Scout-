@@ -368,6 +368,60 @@ def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
         client.close()
 
 
+@cli.command(name="test-pickup-send")
+@click.option("--kind", type=click.Choice(["job", "candidate", "both"]), default="job",
+              help="job=本日のピックアップ求人(本命) / candidate / both")
+@click.option("--mrccid", help="対象mrccid。未指定ならピックアップ先頭の候補者")
+@click.option("--headless/--no-headless", default=True)
+def test_pickup_send(kind: str, mrccid: str | None, headless: bool) -> None:
+    """ピックアップ送信API(/v2/scouts/pickup)を dryRun=True で検証する（実送信なし）。
+
+    対象条件は無視し、既知の候補者へ dryRun 送信をぶつけてエンドポイントが 200/201 を
+    返すか（payload/権限）を確認する。プラチナ残数は消費せず、実送信も行わない。
+    本番(dry_run=false)前に、まだ一度も呼ばれていないピックアップ送信経路を潰すためのもの。
+    """
+    from .bizreach.api import BizreachApi
+    from .bizreach.client import BizreachClient
+    from .config import scout_job_id
+    from .ingest.bizreach_pickup_source import BizreachPickupSource
+
+    client = BizreachClient(headless=headless).start()
+    try:
+        client.ensure_logged_in()
+        api = BizreachApi(client)
+
+        job_id = scout_job_id()
+        if not job_id:
+            click.echo("scout_job_id が未設定です。company.yaml を確認してください。")
+            return
+        click.echo(f"送信求人ID(jobId): {job_id}")
+
+        target = mrccid
+        if not target:
+            src = BizreachPickupSource(max_candidates=1, kind=kind, client=client)
+            cand = next(iter(src.iter_candidates()), None)
+            target = cand.mrccid if cand else None
+        if not target:
+            click.echo("ピックアップ候補者を取得できませんでした（--mrccid で明示指定も可）。")
+            return
+        click.echo(f"対象 mrccid: {target}（対象条件は無視して送信APIのみ検証）")
+
+        subject = "（ピックアップ送信APIテスト・実送信なし）"
+        body = ("本メッセージは送信API(/v2/scouts/pickup)の dryRun 検証用です。"
+                "実送信は行われません。")
+        result = api.send_pickup_scout(job_id, target, subject, body, dry_run=True)
+        click.echo(f"\n[dryRun送信結果] endpoint={result.get('endpoint')} {result}")
+        if result.get("status") in (200, 201):
+            click.echo("\n✅ ピックアップ送信APIの検証に成功しました"
+                       f"（status={result.get('status')}・実送信なし・残数消費なし）。"
+                       "本番(dry_run=false)へ進めます。")
+        else:
+            click.echo("\n⚠️ ピックアップ送信APIが 200/201 以外を返しました。"
+                       "上記レスポンスを確認してください（本番前に要修正）。")
+    finally:
+        client.close()
+
+
 @cli.command(name="probe-pickup")
 @click.option("--headless/--no-headless", default=True)
 def probe_pickup(headless: bool) -> None:
