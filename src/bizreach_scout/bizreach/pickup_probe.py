@@ -86,12 +86,25 @@ class PickupProbe:
         """
         lines = []
         try:
-            # 送信済(SCOUTED)以外の freescout を選ぶ。
-            loc = page.locator('a.freescout:not([data-scount-status="SCOUTED"])')
-            if loc.count() == 0:
-                loc = page.locator("a.freescout")
+            # 本命の「ピックアップ求人」(pick-up-job)を優先。未送信(SCOUTED以外)を選ぶ。
+            loc = None
+            for sel in (
+                'li[data-itemid^="pick-up-job"] a.freescout:not([data-scount-status="SCOUTED"])',
+                'li[data-itemid^="pick-up-job"] a.freescout',
+                'a.freescout:not([data-scount-status="SCOUTED"])',
+                "a.freescout",
+            ):
+                cand = page.locator(sel)
+                if cand.count() > 0:
+                    loc = cand
+                    lines.append(f"使用セレクタ: {sel}")
+                    break
+            if loc is None:
+                (self.out / "pickup_freescout.txt").write_text(
+                    "a.freescout リンクが見つかりません。", encoding="utf-8")
+                return
             n = loc.count()
-            lines.append(f"freescout(未送信優先)リンク数: {n}")
+            lines.append(f"対象freescoutリンク数: {n}")
             if n == 0:
                 (self.out / "pickup_freescout.txt").write_text(
                     "a.freescout リンクが見つかりません。", encoding="utf-8")
