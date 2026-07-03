@@ -50,7 +50,9 @@ def _map_grade(raw: str) -> Education:
     low = raw.lower()
     if any(k in low for k in ("doctor", "phd", "doctorate")):
         return Education.doctor
-    if "master" in low or "postgrad" in low or ("graduate" in low and "undergrad" not in low):
+    # MBA/EMBA/LLM 等の専門職学位は大学院卒（master 相当）。実データで "MBA" を確認済み。
+    if ("master" in low or "mba" in low or "llm" in low or "postgrad" in low
+            or ("graduate" in low and "undergrad" not in low)):
         return Education.master
     if any(k in low for k in ("bachelor", "university", "undergrad")):
         return Education.bachelor
@@ -124,17 +126,23 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     )
 
     # --- 学歴・大学 ---
+    # エントリ順に依存せず、全学歴レコードの最上位（最高ランク）を最終学歴とする。
     education = Education.unknown
     university = ""
     edus = resume.get("educations") or []
     if edus:
-        raw_grade = edus[0].get("schoolGrade", "")
-        education = _map_grade(raw_grade)
-        university = _ja(edus[0].get("name"))
-        # キーワード推定でも判別できない値のみ可視化（要マッピング追加のサイン）。
-        if education is Education.unknown and raw_grade:
-            logger.info("未対応の学歴グレード（要マッピング確認）: %r（mrccid=%s 大学=%s）",
-                        raw_grade, mrccid or member_no, university)
+        best_name = ""
+        for e in edus:
+            g = _map_grade(e.get("schoolGrade", ""))
+            if g.rank > education.rank:
+                education, best_name = g, _ja(e.get("name"))
+        university = best_name or _ja(edus[0].get("name"))
+        # どの学歴レコードも判別できない値のみ可視化（要マッピング追加のサイン）。
+        if education is Education.unknown:
+            raws = [e.get("schoolGrade", "") for e in edus if e.get("schoolGrade")]
+            if raws:
+                logger.info("未対応の学歴グレード（要マッピング確認）: %s（mrccid=%s 大学=%s）",
+                            raws, mrccid or member_no, _ja(edus[0].get("name")))
 
     # --- 職歴 ---
     companies = resume.get("companyExperiences") or []

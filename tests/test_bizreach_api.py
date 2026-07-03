@@ -81,6 +81,25 @@ def test_map_grade_university_variants_never_dropped():
     assert _map_grade("Undergraduate") == Education.bachelor  # "graduate"を含むが学部卒
 
 
+def test_map_grade_mba_is_master():
+    # 実データで確認: schoolGrade="MBA"（グロービス経営大学院）は大学院卒＝master相当。
+    assert _map_grade("MBA") == Education.master
+    assert _map_grade("EMBA") == Education.master
+    assert _map_grade("LLM") == Education.master
+
+
+def test_highest_education_wins_across_entries():
+    # 学歴が複数ある場合はエントリ順に関係なく最上位を最終学歴とする。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "立教大学", "en": None}},
+        {"schoolGrade": "MBA", "name": {"ja": "グロービス経営大学院", "en": None}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.education == Education.master
+    assert check_eligibility(c).eligible  # 大学院卒→大学卒以上を満たす
+
+
 def test_junior_college_candidate_reads_and_is_ineligible():
     # BU2490384 相当（高専・専門・短大卒）は不明ではなく大学卒未満で判定される。
     resume = _resume()
