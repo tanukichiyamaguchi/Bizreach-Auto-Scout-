@@ -279,10 +279,14 @@ def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
         client.ensure_logged_in()
         api = BizreachApi(client)
 
-        job_id = api.get_job_id(search_url)
-        click.echo(f"jobId: {job_id}")
+        from .config import scout_job_id
+
+        # スカウト送信は「会員種別を問わず送れる求人」で行う（設定値を優先）。
+        job_id = scout_job_id() or api.get_job_id(search_url)
+        click.echo(f"送信求人ID(jobId): {job_id}"
+                   f"（検索の求人: {api.get_job_id(search_url)}）")
         if not job_id:
-            click.echo("jobId を取得できませんでした。検索URLを確認してください。")
+            click.echo("jobId を取得できませんでした。company.yaml の scout_job_id を確認してください。")
             return
 
         holders = api.get_platinum_scout_holders()

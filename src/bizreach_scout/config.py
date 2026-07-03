@@ -108,6 +108,19 @@ def scout_rules() -> dict[str, Any]:
     return _load_yaml(project_root() / "config" / "scout_rules.yaml")
 
 
+def scout_job_id() -> str | None:
+    """スカウト送信に使う求人ID。
+
+    優先順位: 環境変数 BIZSCOUT_SCOUT_JOB_ID > company.yaml の job.scout_job_id。
+    保存検索に紐づく求人ではなく、会員種別を問わず送れる求人を指定する。
+    """
+    env = os.environ.get("BIZSCOUT_SCOUT_JOB_ID")
+    if env:
+        return env.strip()
+    jid = (company_config().get("job", {}) or {}).get("scout_job_id")
+    return str(jid).strip() if jid else None
+
+
 @lru_cache(maxsize=1)
 def prompt_template() -> str:
     path = project_root() / "config" / "prompt_template.md"

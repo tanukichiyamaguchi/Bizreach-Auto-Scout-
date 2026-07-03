@@ -28,6 +28,10 @@ company:
 
 job:
   title: 経営コンサルタント
+  # スカウト送信に使う求人ID（求人管理ID）。ハイクラス/タレント両方に送れる求人を指定する。
+  # 保存検索に紐づく求人ではなく、この求人IDでスカウトを送る（会員種別を問わず送れる求人）。
+  # 環境変数 BIZSCOUT_SCOUT_JOB_ID でも上書き可能。
+  scout_job_id: "7437375"   # 【ALL】経営コンサルタント（Talent・HighClass両対応）
   employment_type: 正社員
   headcount: 3
   location: 全国クライアント医院（月15〜20件）※出張あり、転勤なし
