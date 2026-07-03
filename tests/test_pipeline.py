@@ -30,8 +30,8 @@ class FakeSender:
         self.status = status
         self.sent = []
 
-    def send_scout(self, url, subject, body):
-        self.sent.append((url, subject, body))
+    def send_scout(self, candidate, subject, body, reminder=None):
+        self.sent.append((candidate.profile_url, subject, body, reminder))
         return SimpleNamespace(status=self.status, detail="")
 
 
@@ -77,7 +77,8 @@ def test_cap_then_retry_next_run_does_not_lose_candidate(tmp_path):
     assert report2.skipped_duplicate == 1  # BU1000001
     assert report2.sent == 1               # BU1000002 が今回送信される
     assert report2.reused == 1             # 再生成せず再利用
-    assert ("https://ex.com/2", "【Premium Offer】初回", "初回本文") in sender.sent
+    assert any(s[:3] == ("https://ex.com/2", "【Premium Offer】初回", "初回本文")
+               for s in sender.sent)
 
     # 2件目の文面は2回目で再生成されていない（generate は1回目に各1回のみ）
     assert gen.calls.count("BU1000002") == 1
@@ -94,6 +95,27 @@ def test_ineligible_skipped(tmp_path):
     assert report.skipped_ineligible == 1
     assert report.sent == 0
     assert gen.calls == []  # 生成すら行わない
+
+
+def test_native_reminder_attached_and_resend_marked_skipped(tmp_path):
+    """初回送信に追客(reminder)が添付され、独自再送は skipped（二重送信防止）。"""
+    db = tmp_path / "t.db"
+    gen = FakeGenerator()
+    sender = FakeSender("sent")
+    repo = Repository(db_path=db)
+    pipe = ScoutPipeline(repo=repo, generator=gen, sender=sender)
+    pipe.settings.max_sends_per_run = 5
+    cand = [make_candidate(member_no="BU9000001", profile_url="https://ex.com/9")]
+    pipe.run(ListSource(cand), send=True)
+
+    reminder = sender.sent[0][3]
+    assert reminder is not None
+    assert reminder["daysAfter"] == "FiveDays"
+    assert reminder["subject"] == "【Premium Offer】再送"
+    assert reminder["body"] == "再送本文"
+    # 独自再送は行わない（native reminder 扱いで skipped）。
+    assert repo.get_scout("BU9000001", "resend")["status"] == "skipped"
+    repo.close()
 
 
 def test_dry_run_keeps_generated_and_can_send_later(tmp_path):

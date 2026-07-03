@@ -20,7 +20,14 @@ _EDU_MAP = {
 }
 
 
-def check_eligibility(candidate: Candidate, rules: dict | None = None) -> EligibilityResult:
+def check_eligibility(candidate: Candidate, rules: dict | None = None,
+                      apply_status_filter: bool = True) -> EligibilityResult:
+    """対象条件を判定する。
+
+    apply_status_filter=False の場合は会員ステータス条件（新着/更新/HOT/WILL/premium）を
+    適用しない。ピックアップ求人はビズリーチが選抜した本命リストのため、ステータス不問で
+    送る運用（ユーザー指定）。年齢・性別・学歴・勤続などのコア条件は常に適用する。
+    """
     cfg = (rules or scout_rules()).get("eligibility", {})
     failed: list[str] = []
 
@@ -53,5 +60,16 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None) -> Eligib
         failed.append("勤続年数が不明（要確認）")
     elif tenure < min_years:
         failed.append(f"同一企業での勤続が{min_years}年未満（{tenure}年）")
+
+    # --- 会員ステータス（新着/更新/HOT/WILL/プレミアムのいずれか）-------------
+    # ピックアップ求人では適用しない（apply_status_filter=False）。
+    require_status = cfg.get("require_any_status", []) or []
+    if apply_status_filter and require_status:
+        matched = candidate.status_flags() & set(require_status)
+        if not matched:
+            _labels = {"new": "新着", "updated": "更新", "hot": "HOT",
+                       "will": "WILL", "premium": "プレミアム"}
+            need = "/".join(_labels.get(s, s) for s in require_status)
+            failed.append(f"会員ステータスが対象外（{need} のいずれにも該当せず）")
 
     return EligibilityResult(eligible=not failed, failed=failed)

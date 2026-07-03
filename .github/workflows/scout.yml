@@ -23,6 +23,11 @@ on:
         description: "1回の最大処理件数"
         type: string
         default: "30"
+      mode:
+        description: "実行モード（scout / pickup / test-pickup-send=ピックアップ送信API検証 / probe-* / test-send）"
+        type: choice
+        options: ["scout", "pickup", "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
+        default: "scout"
   schedule:
     # 毎日 09:00 JST（00:00 UTC）。定期実行は repo variables の設定値を使う。
     - cron: "0 0 * * *"
@@ -74,17 +79,30 @@ jobs:
             bizscout-data-
 
       # --- 設定の解決（手動入力 or repo variables）---
+      # 検索URLは複数指定可（改行・半角スペース・パイプ | 区切り。カンマは不可）。
+      # 複数行の値も壊れないよう env: 経由＋heredocで安全に渡す。
       - name: Resolve run config
+        env:
+          IN_SEARCH_URL: ${{ inputs.search_url }}
+          VAR_SEARCH_URL: ${{ vars.BIZSCOUT_SEARCH_URL }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "BIZSCOUT_DRY_RUN=${{ inputs.dry_run }}" >> "$GITHUB_ENV"
-            echo "SEARCH_URL=${{ inputs.search_url }}" >> "$GITHUB_ENV"
             echo "RUN_MAX=${{ inputs.max }}" >> "$GITHUB_ENV"
+            echo "RUN_MODE=${{ inputs.mode }}" >> "$GITHUB_ENV"
+            SEARCH_URL_VAL="$IN_SEARCH_URL"
           else
             echo "BIZSCOUT_DRY_RUN=${{ vars.BIZSCOUT_DRY_RUN || 'true' }}" >> "$GITHUB_ENV"
-            echo "SEARCH_URL=${{ vars.BIZSCOUT_SEARCH_URL }}" >> "$GITHUB_ENV"
             echo "RUN_MAX=${{ vars.BIZSCOUT_MAX || '30' }}" >> "$GITHUB_ENV"
+            echo "RUN_MODE=scout" >> "$GITHUB_ENV"
+            SEARCH_URL_VAL="$VAR_SEARCH_URL"
           fi
+          # 複数行対応で SEARCH_URL を渡す（1URL/行でもスペース/パイプ区切りでもOK）。
+          {
+            echo "SEARCH_URL<<__BIZSCOUT_EOF__"
+            echo "$SEARCH_URL_VAL"
+            echo "__BIZSCOUT_EOF__"
+          } >> "$GITHUB_ENV"
 
       # --- ログイン セッションを secret から復元（2FA/bot検知回避に推奨）---
       - name: Seed Bizreach session
@@ -103,7 +121,18 @@ jobs:
         continue-on-error: true
         run: bizscout doctor
 
-      - name: Run scout (1サイクル)
+      # 本日のピックアップ求人（無料枠・本命）。schedule と mode=pickup で実行。
+      # 本命なので先に実行し、失敗しても検索スカウトは続行させる（continue-on-error）。
+      - name: Run pickup (本日のピックアップ・無料枠・本命)
+        if: env.RUN_MODE == 'pickup' || github.event_name == 'schedule'
+        continue-on-error: true
+        run: |
+          echo "本日のピックアップ求人へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX）。"
+          bizscout run-pickup --kind job --max "$RUN_MAX"
+
+      # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
+      - name: Run scout (検索スカウト＋再送)
+        if: env.RUN_MODE == 'scout' || github.event_name == 'schedule'
         run: |
           echo "DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX / SEARCH_URL set: $([ -n "$SEARCH_URL" ] && echo yes || echo no)"
           if [ -n "$SEARCH_URL" ]; then
@@ -111,6 +140,42 @@ jobs:
           else
             bizscout serve --once --max "$RUN_MAX"
           fi
+
+      # 送信フロー偵察モード（実送信なし）。送信API/セレクタ特定用の情報を artifact に残す。
+      - name: Probe send flow (実送信なし)
+        if: env.RUN_MODE == 'probe-send'
+        run: |
+          echo "送信フロー偵察を実行します（実送信はしません）。"
+          if [ -n "$SEARCH_URL" ]; then
+            bizscout probe-send --search-url "$SEARCH_URL"
+          else
+            echo "SEARCH_URL が未設定です。search_url を指定して再実行してください。"
+            exit 1
+          fi
+
+      # 送信API検証モード（dryRun=True・実送信なし）。payload/権限の確認用。
+      - name: Test send (dryRun・実送信なし)
+        if: env.RUN_MODE == 'test-send'
+        run: |
+          echo "送信APIを dryRun=True で検証します（実送信はしません）。"
+          if [ -n "$SEARCH_URL" ]; then
+            bizscout test-send --search-url "$SEARCH_URL"
+          else
+            echo "SEARCH_URL が未設定です。search_url を指定して再実行してください。"
+            exit 1
+          fi
+
+      # 本日のピックアップ候補者リストAPIの偵察（実送信なし）。
+      - name: Probe pickup (実送信なし)
+        if: env.RUN_MODE == 'probe-pickup'
+        run: bizscout probe-pickup
+
+      # ピックアップ送信API(/v2/scouts/pickup)の dryRun 検証（対象条件を無視・実送信なし）。
+      - name: Test pickup send (dryRun・実送信なし)
+        if: env.RUN_MODE == 'test-pickup-send'
+        run: |
+          echo "ピックアップ送信APIを dryRun=True で検証します（実送信なし・残数消費なし）。"
+          bizscout test-pickup-send --kind job
 
       - name: Status report
         if: always()

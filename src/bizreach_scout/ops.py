@@ -43,9 +43,12 @@ def _check_anthropic_api_key() -> Check:
 
 
 def _check_model() -> Check:
-    """生成モデル名を表示する（常に ok）。"""
-    model = get_settings().model
-    return Check("生成モデル", "ok", f"使用モデル: {model}")
+    """生成モデル名と拡張思考の設定を表示する（常に ok）。"""
+    s = get_settings()
+    budget = s.thinking_budget_tokens
+    think = f"拡張思考ON({budget}tok)" if budget and budget > 0 else "拡張思考OFF"
+    return Check("生成モデル", "ok",
+                 f"使用モデル: {s.model} / {think} / max_tokens={s.max_tokens}")
 
 
 def _check_bizreach_credentials() -> Check:

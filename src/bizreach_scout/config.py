@@ -36,7 +36,11 @@ class Settings(BaseSettings):
 
     # Anthropic（API キーは ANTHROPIC_API_KEY を直接参照）
     model: str = "claude-opus-4-8"
-    max_tokens: int = 4096
+    max_tokens: int = 16000
+    # 拡張思考(extended thinking)。>0 で有効化し、その token 数だけ内部推論に使う。
+    # 必ず max_tokens より小さくすること（max_tokens は思考+出力の合計上限）。
+    # 0 にすると拡張思考オフ（従来の標準モード）。
+    thinking_budget_tokens: int = 8000
 
     # 送信制御
     dry_run: bool = True
@@ -47,6 +51,12 @@ class Settings(BaseSettings):
 
     # 再送
     resend_after_days: int = 5
+
+    # ブラウザ（bot検知対策で実ブラウザのUAに寄せる）
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
 
     # パス
     home: str = "."
@@ -100,6 +110,19 @@ def company_config() -> dict[str, Any]:
 @lru_cache(maxsize=1)
 def scout_rules() -> dict[str, Any]:
     return _load_yaml(project_root() / "config" / "scout_rules.yaml")
+
+
+def scout_job_id() -> str | None:
+    """スカウト送信に使う求人ID。
+
+    優先順位: 環境変数 BIZSCOUT_SCOUT_JOB_ID > company.yaml の job.scout_job_id。
+    保存検索に紐づく求人ではなく、会員種別を問わず送れる求人を指定する。
+    """
+    env = os.environ.get("BIZSCOUT_SCOUT_JOB_ID")
+    if env:
+        return env.strip()
+    jid = (company_config().get("job", {}) or {}).get("scout_job_id")
+    return str(jid).strip() if jid else None
 
 
 @lru_cache(maxsize=1)

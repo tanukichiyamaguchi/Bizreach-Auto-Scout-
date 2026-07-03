@@ -85,6 +85,28 @@ class Candidate(BaseModel):
 
     source: str = "manual"  # bizreach / csv / text / manual
     profile_url: str = ""
+    mrccid: str = ""  # ビズリーチ内部の候補者ID（API・スカウト送信に使用）
+
+    # --- ステータス（ターゲティング用）---
+    intention: list[str] = Field(default_factory=list)  # Hot / Will
+    resume_updated_status: str = ""  # New(新着) / Updated(更新) / None
+    contract_plan: str = ""  # Premium / Free
+    candidate_class: str = ""  # HighClass / Talent
+
+    def status_flags(self) -> set[str]:
+        """該当するターゲティング区分を返す（new/updated/hot/will/premium）。"""
+        flags: set[str] = set()
+        if self.resume_updated_status == "New":
+            flags.add("new")
+        if self.resume_updated_status == "Updated":
+            flags.add("updated")
+        if "Hot" in self.intention:
+            flags.add("hot")
+        if "Will" in self.intention:
+            flags.add("will")
+        if self.contract_plan == "Premium":
+            flags.add("premium")
+        return flags
 
     def all_companies(self) -> list[str]:
         names = [self.current_company, *self.prior_companies]

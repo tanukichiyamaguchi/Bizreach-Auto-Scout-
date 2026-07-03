@@ -36,10 +36,20 @@ class BizreachClient:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
+        # 自動化フラグを隠し、実ブラウザに寄せる。
+        self._browser = self._pw.chromium.launch(
+            headless=self.headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
 
         state_path = self._storage_state_path()
-        ctx_kwargs = {"locale": "ja-JP"}
+        ctx_kwargs: dict = {
+            "locale": "ja-JP",
+            "timezone_id": "Asia/Tokyo",
+            "user_agent": self.settings.user_agent,
+            "viewport": {"width": 1366, "height": 900},
+            "extra_http_headers": {"Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"},
+        }
         if state_path.exists():
             ctx_kwargs["storage_state"] = str(state_path)
         self._context = self._browser.new_context(**ctx_kwargs)
@@ -83,13 +93,42 @@ class BizreachClient:
 
     # --- ログイン -------------------------------------------------------------
     def ensure_logged_in(self) -> None:
-        """保存済みセッションで未ログインならログインする。"""
+        """保存済みセッションで未ログインならログインし、担当グループを選択する。"""
         self.page.goto(self.sel.base_url, wait_until="domcontentloaded")
         self.human_delay()
-        if self.page.locator(self.sel.logged_in_marker).count() > 0:
-            logger.info("既存セッションでログイン済み。")
+        if self.page.locator(self.sel.logged_in_marker).count() == 0:
+            self.login()
+        self.select_group()
+
+    def select_group(self) -> None:
+        """ログイン後、担当グループを選択する（未選択だと検索/スカウトに進めない）。
+
+        ビズリーチは /login/selectGroup/ でグループを選ばせる。グループが1つでも
+        明示的に選択する必要があるため、選択リンクがあればクリックする。
+        """
+        sel = getattr(self.sel, "group_select_link", "")
+        if not sel:
             return
-        self.login()
+        try:
+            group_url = self.sel.base_url.rstrip("/") + "/login/selectGroup/"
+            self.page.goto(group_url, wait_until="domcontentloaded")
+            self.human_delay()
+            link = self.page.locator(sel)
+            n = link.count()
+            if n > 0:
+                logger.info("担当グループを選択します（候補 %d 件の先頭）。", n)
+                link.first.click(timeout=15000)
+                # networkidle はこのサイトの常時通信(計測/ロングポーリング)で30秒
+                # 到達せずタイムアウトするため使わない。load を短時間だけ待って続行する。
+                try:
+                    self.page.wait_for_load_state("load", timeout=10000)
+                except Exception:  # noqa: BLE001
+                    pass
+                self.human_delay()
+            else:
+                logger.info("グループ選択リンクが見つかりません（選択済み/不要の可能性）。")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("グループ選択でエラー: %s", e)
 
     def login(self) -> None:
         if not self.creds.email or not self.creds.password:
@@ -109,7 +148,16 @@ class BizreachClient:
         except Exception as e:  # noqa: BLE001
             logger.info("ログインボタンをクリックできず(%s)。Enterで送信します。", e)
             self.page.press(self.sel.login_password, "Enter")
-        self.page.wait_for_load_state("networkidle")
+        # networkidle はこのサイトの常時通信で到達せず30秒待つことがあるため使わない。
+        # 成否はログイン済みマーカーで判定する（描画に少し猶予を与える）。
+        try:
+            self.page.wait_for_load_state("load", timeout=10000)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.page.locator(self.sel.logged_in_marker).first.wait_for(timeout=10000)
+        except Exception:  # noqa: BLE001
+            pass
         self.human_delay()
         if self.page.locator(self.sel.logged_in_marker).count() == 0:
             logger.warning(

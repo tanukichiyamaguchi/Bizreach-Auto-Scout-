@@ -34,10 +34,16 @@ class BizreachSender:
     def _kill_switch_active(self) -> bool:
         return self.settings.kill_switch_path.exists()
 
-    def send_scout(self, profile_url: str, subject: str, body: str) -> SendOutcome:
+    def send_scout(self, candidate, subject: str, body: str,
+                   reminder: dict | None = None) -> SendOutcome:
+        # reminder（追客）はDOM操作では未対応のため無視する（API送信側で対応）。
         if self._kill_switch_active():
             logger.warning("kill switch が有効です。送信を中止します。")
             return SendOutcome("blocked", "kill switch active")
+
+        profile_url = getattr(candidate, "profile_url", "") or ""
+        if not profile_url:
+            return SendOutcome("failed", "profile_url が無いため送信不可")
 
         page = self.client.page
         try:

@@ -56,10 +56,9 @@ def run_cycle(
         logger.warning("kill switch が有効です。このサイクルの送信を全てスキップします。")
         return {"skipped": "kill_switch"}
 
-    # 取り込み（BizreachSource）と送信（BizreachSender）はブラウザが必要なときだけ起動する。
+    # 取り込み（API）はブラウザ（認証済みコンテキスト）が必要。
     from .bizreach.client import BizreachClient
-    from .bizreach.sender import BizreachSender
-    from .ingest.bizreach_source import BizreachSource
+    from .ingest.bizreach_api_source import BizreachApiSource
 
     repo = Repository()
     client: BizreachClient | None = None
@@ -67,7 +66,12 @@ def run_cycle(
     try:
         client = BizreachClient(headless=headless).start()
         client.ensure_logged_in()
-        sender = BizreachSender(client)
+        # 送信はビズリーチ内部API（プラチナスカウト主・両会員種別対応）で行う。
+        # dry_run は設定(BIZSCOUT_DRY_RUN)に従い、kill switch・残数・上限も尊重する。
+        from .bizreach.api import BizreachApi
+        from .bizreach.api_sender import ApiScoutSender
+
+        sender = ApiScoutSender(BizreachApi(client)) if send else None
 
         # --- 初回送信パイプライン（search_url がある場合のみ。複数URL対応）---
         urls = parse_search_urls(search_url)
@@ -78,7 +82,7 @@ def run_cycle(
             pipeline = ScoutPipeline(repo=repo, generator=None, sender=sender)
             for i, url in enumerate(urls, start=1):
                 logger.info("検索URL %d/%d を処理します。", i, len(urls))
-                source = BizreachSource(url, max_candidates, client=client)
+                source = BizreachApiSource(url, max_candidates, client=client)
                 # 既送信件数を渡し、複数URLでも1実行あたりの送信上限を守る。
                 sent_so_far = agg["sent"] + agg["dry_run"]
                 report = pipeline.run(source, send=send, sent_offset=sent_so_far)
