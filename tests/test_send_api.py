@@ -27,20 +27,22 @@ class _FakeResponse:
 class _FakeRequest:
     def __init__(self, responses=None):
         self.calls = []
+        # 値は payload(dict) か (status, payload) のタプル。
         self._responses = responses or {}
 
-    def _resp_for(self, url):
-        for key, payload in self._responses.items():
+    def _resp_for(self, url, default_payload):
+        for key, val in self._responses.items():
             if key in url:
-                return _FakeResponse(200, payload)
-        return _FakeResponse(200, {"candidates": [{"mrccid": "X"}]})
+                status, payload = val if isinstance(val, tuple) else (200, val)
+                return _FakeResponse(status, payload)
+        return _FakeResponse(200, default_payload)
 
     def post(self, url, headers=None, data=None):
         self.calls.append({"url": url, "headers": headers or {}, "data": data})
-        return self._resp_for(url)
+        return self._resp_for(url, {"candidates": [{"mrccid": "X"}]})
 
     def get(self, url):
-        return _FakeResponse(200, {})
+        return self._resp_for(url, {})
 
 
 class _FakePage:
@@ -144,6 +146,20 @@ def test_route_no_error_goes_candidates():
     out = api.route_scout("J", "TL", "s", "b", dry_run=True)
     assert out["endpoint"] == "candidates"
     assert req.calls[-1]["url"].endswith("/scouts/candidates")
+
+
+def test_route_candidates_failure_falls_back_to_platinum():
+    # 通常送信が失敗（token未確定などで400）→ プラチナにフォールバックして成功。
+    resp = {
+        "checkCandidates": {"candidates": [{"mrccid": "TL", "error": None}]},
+        "scouts/candidates": (400, {"code": "ValidationViolated"}),
+        "scouts/platinum": (200, {"result": "ok"}),
+    }
+    api, req = _api(resp)
+    out = api.route_scout("J", "TL", "s", "b", dry_run=True)
+    assert out["endpoint"] == "platinum(fallback)"
+    assert out["status"] == 200
+    assert "candidates_error" in out
 
 
 def test_route_other_error_skips():

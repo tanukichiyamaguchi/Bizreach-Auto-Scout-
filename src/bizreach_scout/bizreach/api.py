@@ -423,15 +423,33 @@ class BizreachApi:
             logger.warning("%sスカウト送信に失敗 mrccid=%s status=%s body=%s",
                            kind, mrccid, out.get("status"), out)
 
+    def _platinum_send_guarded(self, job_id: str, mrccid: str, subject: str, body: str,
+                               dry_run: bool, search_id: str | None,
+                               reminder: dict | None, label: str = "platinum") -> dict:
+        """残数ガード付きのプラチナ送信（本送信のみ残数を確認・減算）。"""
+        remaining = self.platinum_remaining()
+        if not dry_run and remaining is not None and remaining <= 0:
+            logger.warning("プラチナ残数が0のため送信をスキップ mrccid=%s", mrccid)
+            return {"status": 0, "skipped": "PlatinumQuotaExhausted",
+                    "endpoint": label, "platinum_remaining": 0}
+        out = self.send_platinum_scout(job_id, mrccid, subject, body,
+                                       dry_run, search_id, reminder)
+        out["endpoint"] = label
+        if not dry_run and out.get("status") == 200 \
+                and self._platinum_remaining is not None:
+            self._platinum_remaining -= 1
+        out["platinum_remaining"] = self._platinum_remaining
+        return out
+
     def route_scout(self, job_id: str, mrccid: str, subject: str, body: str,
                     dry_run: bool = True, search_id: str | None = None,
                     reminder: dict | None = None) -> dict:
         """会員種別に応じて通常/プラチナへ振り分けて送信する。
 
         checkCandidates の error を見て振り分ける:
-          - error なし        → 通常スカウト（/candidates）
-          - ClassMismatch     → プラチナスカウト（/platinum）
+          - ClassMismatch     → プラチナスカウト（/platinum・token不要）
           - その他の error     → スキップ（既送信・対象外など）
+          - error なし        → 通常スカウト（/candidates）。失敗時はプラチナへフォールバック。
         戻り値に "endpoint" を付与する。
         """
         check = self.check_candidates(job_id, [mrccid])
@@ -440,27 +458,27 @@ class BizreachApi:
             if c.get("mrccid") == mrccid:
                 err = c.get("error")
                 break
+
         if err == "ClassMismatch":
-            # プラチナ残数を確認（本送信のみゲート。dryRunは消費しない）。
-            remaining = self.platinum_remaining()
-            if not dry_run and remaining is not None and remaining <= 0:
-                logger.warning("プラチナ残数が0のため送信をスキップ mrccid=%s", mrccid)
-                return {"status": 0, "skipped": "PlatinumQuotaExhausted",
-                        "endpoint": "platinum", "platinum_remaining": 0}
-            out = self.send_platinum_scout(job_id, mrccid, subject, body,
-                                           dry_run, search_id, reminder)
-            out["endpoint"] = "platinum"
-            # 本送信の成功時のみ残数を減算。
-            if not dry_run and out.get("status") == 200 \
-                    and self._platinum_remaining is not None:
-                self._platinum_remaining -= 1
-            out["platinum_remaining"] = self._platinum_remaining
-        elif err:
+            return self._platinum_send_guarded(job_id, mrccid, subject, body,
+                                               dry_run, search_id, reminder)
+        if err:
             logger.info("送信不可のためスキップ mrccid=%s error=%s", mrccid, err)
-            out = {"status": 0, "skipped": err, "endpoint": "skip"}
-        else:
-            token = self.create_one_time_token()
-            out = self.send_scout(job_id, mrccid, subject, body,
-                                  dry_run, search_id, reminder, token)
-            out["endpoint"] = "candidates"
+            return {"status": 0, "skipped": err, "endpoint": "skip"}
+
+        # error なし → 通常スカウト。tokenが必要でパスが未確定のため、失敗時は
+        # プラチナ（token不要・ユーザーの実運用と一致）にフォールバックする。
+        token = self.create_one_time_token()
+        out = self.send_scout(job_id, mrccid, subject, body,
+                              dry_run, search_id, reminder, token)
+        out["endpoint"] = "candidates"
+        if out.get("status") != 200:
+            logger.info("通常送信が失敗(status=%s)。プラチナにフォールバック mrccid=%s",
+                        out.get("status"), mrccid)
+            fb = self._platinum_send_guarded(job_id, mrccid, subject, body,
+                                             dry_run, search_id, reminder,
+                                             label="platinum(fallback)")
+            if fb.get("status") == 200 or fb.get("skipped"):
+                fb["candidates_error"] = out
+                return fb
         return out
