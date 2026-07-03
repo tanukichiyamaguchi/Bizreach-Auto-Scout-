@@ -145,7 +145,8 @@ class SendProbe:
             scout_code: list[str] = []
             # 送信リクエストの本文構築コードを含みうるマーカー。
             code_markers = ["sendScoutCandidates", "checkScoutCandidates",
-                            "scouts/candidates", "SendScout"]
+                            "scouts/candidates", "SendScout",
+                            "createOneTimeToken", "oneTimeToken"]
             for url in chunks:
                 js = self._req_get(url)
                 if not js:

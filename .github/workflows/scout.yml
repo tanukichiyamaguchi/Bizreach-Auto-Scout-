@@ -24,9 +24,9 @@ on:
         type: string
         default: "30"
       mode:
-        description: "実行モード（scout=通常運用 / probe-send=送信フロー偵察・実送信なし）"
+        description: "実行モード（scout=通常運用 / probe-send=送信偵察 / test-send=送信API検証(dryRun)）"
         type: choice
-        options: ["scout", "probe-send"]
+        options: ["scout", "probe-send", "test-send"]
         default: "scout"
   schedule:
     # 毎日 09:00 JST（00:00 UTC）。定期実行は repo variables の設定値を使う。
@@ -127,6 +127,18 @@ jobs:
           echo "送信フロー偵察を実行します（実送信はしません）。"
           if [ -n "$SEARCH_URL" ]; then
             bizscout probe-send --search-url "$SEARCH_URL"
+          else
+            echo "SEARCH_URL が未設定です。search_url を指定して再実行してください。"
+            exit 1
+          fi
+
+      # 送信API検証モード（dryRun=True・実送信なし）。payload/権限の確認用。
+      - name: Test send (dryRun・実送信なし)
+        if: env.RUN_MODE == 'test-send'
+        run: |
+          echo "送信APIを dryRun=True で検証します（実送信はしません）。"
+          if [ -n "$SEARCH_URL" ]; then
+            bizscout test-send --search-url "$SEARCH_URL"
           else
             echo "SEARCH_URL が未設定です。search_url を指定して再実行してください。"
             exit 1

@@ -261,6 +261,62 @@ def probe_send(mrccid: str | None, search_url: str | None, headless: bool) -> No
         client.close()
 
 
+@cli.command(name="test-send")
+@click.option("--search-url", required=True, help="bizreach の検索結果URL（保存検索）")
+@click.option("--mrccid", help="対象候補者mrccid。未指定なら検索先頭の候補者")
+@click.option("--headless/--no-headless", default=True)
+def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
+    """送信APIを dryRun=True で検証する（実送信なし・payload/権限の確認用）。
+
+    ジョブID取得 → 候補者取得 → 文面生成 → 送信前チェック → dryRun送信 まで実行し、
+    各APIレスポンスを表示する。実際のスカウトは送信されない。
+    """
+    from .bizreach.api import BizreachApi
+    from .bizreach.client import BizreachClient
+
+    client = BizreachClient(headless=headless).start()
+    try:
+        client.ensure_logged_in()
+        api = BizreachApi(client)
+
+        job_id = api.get_job_id(search_url)
+        click.echo(f"jobId: {job_id}")
+        if not job_id:
+            click.echo("jobId を取得できませんでした。検索URLを確認してください。")
+            return
+
+        target = mrccid or next(iter(api.iter_candidate_ids(search_url, 1)), None)
+        if not target:
+            click.echo("候補者を取得できませんでした。")
+            return
+        click.echo(f"対象 mrccid: {target}")
+
+        candidate = api.get_candidate(target)
+        if not candidate:
+            click.echo("レジュメを取得できませんでした。")
+            return
+
+        scout = ScoutGenerator().generate(candidate)
+        click.echo(f"生成完了: {candidate.member_no} 件名={scout.first.subject[:40]}...")
+
+        check = api.check_candidates(job_id, [target])
+        click.echo(f"\n[送信前チェック] {check}")
+
+        token = api.create_one_time_token()
+        result = api.send_scout(
+            job_id=job_id, mrccid=target,
+            subject=scout.first.subject, body=scout.first.body,
+            dry_run=True, one_time_token=token,
+        )
+        click.echo(f"\n[dryRun送信結果] {result}")
+        if result.get("status") == 200:
+            click.echo("\n✅ 送信APIの検証に成功しました（実送信なし）。本番送信を有効化できます。")
+        else:
+            click.echo("\n⚠️ 検証に失敗しました。上記レスポンスを確認してください。")
+    finally:
+        client.close()
+
+
 @cli.command()
 def doctor() -> None:
     """完全自動運用の起動前チェック（環境・設定・依存を点検）。"""

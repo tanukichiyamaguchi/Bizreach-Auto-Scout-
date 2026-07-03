@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Iterator
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
@@ -183,17 +184,33 @@ class BizreachApi:
         except Exception:  # noqa: BLE001
             return None
 
-    def get_search_condition(self, rrsc: str) -> dict | None:
+    def get_saved_search(self, rrsc: str) -> dict | None:
+        """保存検索の全体（condition＋job など）を返す。"""
         try:
             resp = self._req.get(f"{self.base}/api/v2/candidates/searchConditions/{rrsc}")
             if resp.status != 200:
                 logger.warning("検索条件の取得に失敗 status=%s", resp.status)
                 return None
-            data = resp.json()
-            return data.get("condition", data)
+            return resp.json()
         except Exception as e:  # noqa: BLE001
             logger.warning("検索条件の取得で例外: %s", e)
             return None
+
+    def get_search_condition(self, rrsc: str) -> dict | None:
+        data = self.get_saved_search(rrsc)
+        if data is None:
+            return None
+        return data.get("condition", data)
+
+    def get_job_id(self, search_url: str) -> str | None:
+        """保存検索に紐づく求人ID(jobId)を返す（スカウト送信に必須）。"""
+        rrsc = self.parse_rrsc(search_url)
+        if not rrsc:
+            return None
+        data = self.get_saved_search(rrsc)
+        if not data:
+            return None
+        return (data.get("job") or {}).get("jobId")
 
     def search_page(self, condition: dict, page: int, page_size: int = 100) -> dict:
         body = {
@@ -254,3 +271,89 @@ class BizreachApi:
         if resume is None:
             return None
         return resume_to_candidate(resume, mrccid)
+
+    # --- スカウト送信 --------------------------------------------------------
+    # フロントJS(sendScoutCandidates)から判明したAPI契約:
+    #   事前確認: POST /api/v2/scouts/checkCandidates  body={jobId, mrccids}
+    #   送信:     POST /api/v2/scouts/candidates
+    #             header x-idempotency-key(必須), 任意 x-search-id / x-screen-type
+    #             body={subject, body, dryRun, jobId, mrccids[], isReservation,
+    #                   reminder, oneTimeToken}
+    # dryRun=True を指定すると、実送信せずにサーバ側の検証のみ行える（安全確認用）。
+
+    def create_one_time_token(self) -> str | None:
+        """送信用のワンタイムトークンを取得する（必要な場合）。パスは複数候補を試行。"""
+        for path in ("/api/v2/oneTimeTokens", "/api/v2/scouts/oneTimeTokens",
+                     "/api/v2/oneTimeToken"):
+            try:
+                resp = self._req.post(f"{self.base}{path}", data={})
+                if resp.status in (200, 201):
+                    data = resp.json()
+                    token = (data.get("oneTimeToken") or data.get("token")
+                             or data.get("value"))
+                    if token:
+                        logger.info("ワンタイムトークンを取得 (%s)", path)
+                        return token
+            except Exception:  # noqa: BLE001
+                continue
+        logger.info("ワンタイムトークンは取得できませんでした（不要の可能性）。")
+        return None
+
+    def check_candidates(self, job_id: str, mrccids: list[str]) -> dict:
+        """送信前チェック。候補者が送信可能か検証する。"""
+        body = {"jobId": job_id, "mrccids": mrccids}
+        try:
+            resp = self._req.post(f"{self.base}/api/v2/scouts/checkCandidates",
+                                  headers={"Content-Type": "application/json"}, data=body)
+            out = {"status": resp.status}
+            try:
+                out.update(resp.json())
+            except Exception:  # noqa: BLE001
+                out["text"] = resp.text()[:2000]
+            return out
+        except Exception as e:  # noqa: BLE001
+            logger.warning("送信前チェックで例外: %s", e)
+            return {"status": 0, "error": str(e)}
+
+    def send_scout(self, job_id: str, mrccid: str, subject: str, body: str,
+                   dry_run: bool = True, search_id: str | None = None,
+                   reminder: str | None = None,
+                   one_time_token: str | None = None) -> dict:
+        """スカウトを送信する（dry_run=Trueで実送信せず検証のみ）。
+
+        戻り値は {"status": HTTPコード, ...レスポンス} 。status==200 で成功。
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "x-idempotency-key": str(uuid.uuid4()),  # 二重送信防止（必須）
+        }
+        if search_id:
+            headers["x-search-id"] = search_id
+        payload = {
+            "subject": subject,
+            "body": body,
+            "dryRun": dry_run,
+            "jobId": job_id,
+            "mrccids": [mrccid],
+            "isReservation": False,
+            "reminder": reminder,          # ThreeDays/FiveDays/TenDays or None
+            "oneTimeToken": one_time_token,
+        }
+        try:
+            resp = self._req.post(f"{self.base}/api/v2/scouts/candidates",
+                                  headers=headers, data=payload)
+            out = {"status": resp.status}
+            try:
+                out.update(resp.json())
+            except Exception:  # noqa: BLE001
+                out["text"] = resp.text()[:2000]
+            if resp.status == 200:
+                logger.info("スカウト送信 %s mrccid=%s (dryRun=%s)",
+                            "検証OK" if dry_run else "完了", mrccid, dry_run)
+            else:
+                logger.warning("スカウト送信に失敗 mrccid=%s status=%s body=%s",
+                               mrccid, resp.status, out)
+            return out
+        except Exception as e:  # noqa: BLE001
+            logger.error("スカウト送信で例外 mrccid=%s: %s", mrccid, e)
+            return {"status": 0, "error": str(e)}
