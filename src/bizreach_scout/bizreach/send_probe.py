@@ -25,12 +25,12 @@ from ..logging_config import logger
 
 SENTINEL = "ZZ_PROBE_DO_NOT_SEND_ZZ"
 
-# スカウトボタンとして試すテキスト候補（表記ゆれに対応）。
-_SCOUT_TEXTS = ["プラチナスカウト", "スカウト", "スカウトを送る", "スカウトする", "オファー"]
-# 送信ボタンとして試すテキスト候補。
-_SEND_TEXTS = ["確認画面へ", "送信内容を確認", "内容を確認", "送信する", "送信", "この内容で送信"]
-# 確認ダイアログの実行ボタン候補。
-_CONFIRM_TEXTS = ["送信する", "送信", "OK", "はい"]
+# スカウトボタンとして試すテキスト候補（表記ゆれに対応）。実画面は『スカウトを送る』。
+_SCOUT_TEXTS = ["スカウトを送る", "プラチナスカウト", "スカウトする", "スカウト", "オファー"]
+# 確認ステップ（本文入力後に押す）。実画面は『内容を確認』。
+_SEND_TEXTS = ["内容を確認", "確認画面へ", "送信内容を確認", "この内容で送信"]
+# 最終送信ボタン候補。実画面は『スカウトを送信』。武装済みのため実送信は中断される。
+_CONFIRM_TEXTS = ["スカウトを送信", "送信する", "送信", "OK", "はい"]
 
 
 class SendProbe:
@@ -142,6 +142,10 @@ class SendProbe:
             self._log(f"JSチャンク {len(chunks)} 件を解析します。")
             endpoints: set[str] = set()
             scout_ctx: list[str] = []
+            scout_code: list[str] = []
+            # 送信リクエストの本文構築コードを含みうるマーカー。
+            code_markers = ["sendScoutCandidates", "checkScoutCandidates",
+                            "scouts/candidates", "SendScout"]
             for url in chunks:
                 js = self._req_get(url)
                 if not js:
@@ -154,6 +158,18 @@ class SendProbe:
                     seg = m.group(0)
                     if "/api/" in seg or "candidates" in seg:
                         scout_ctx.append(seg)
+                # 送信関数の本体を大きめに切り出す（payload構造の特定用）。
+                for marker in code_markers:
+                    start = 0
+                    while True:
+                        idx = js.find(marker, start)
+                        if idx < 0:
+                            break
+                        s = max(0, idx - 400)
+                        e = min(len(js), idx + 1600)
+                        scout_code.append(f"# chunk={url.rsplit('/', 1)[-1]} marker={marker}\n"
+                                          + js[s:e])
+                        start = idx + len(marker)
             eps = sorted(endpoints)
             (self.out / "probe_js_endpoints.txt").write_text("\n".join(eps), encoding="utf-8")
             # 送信っぽいものを強調抽出。
@@ -165,6 +181,12 @@ class SendProbe:
                 "\n\n== 文脈(payload推定用) ==\n" + "\n".join(uniq_ctx),
                 encoding="utf-8",
             )
+            # 送信関数の本体（payload構造特定の本命）。
+            if scout_code:
+                uniq_code = list(dict.fromkeys(scout_code))  # 重複除去（順序維持）
+                (self.out / "probe_js_scout_code.txt").write_text(
+                    "\n\n" + ("=" * 70 + "\n").join(uniq_code), encoding="utf-8")
+                self._log(f"送信関数コードを {len(uniq_code)} 箇所抽出 -> probe_js_scout_code.txt")
             self._log(f"JSから /api/v2/ を {len(eps)} 種、送信候補 {len(send_like)} 種抽出。")
         except Exception as e:  # noqa: BLE001
             self._log(f"JS解析に失敗: {e}")
@@ -264,20 +286,50 @@ class SendProbe:
         except Exception:  # noqa: BLE001
             pass
         self.client.human_delay(1.5, 3.0)
+        # 件名入力欄が現れるまで待つ（作成ドロワーの描画待ち）。
+        try:
+            page.locator("input[placeholder='件名']").first.wait_for(
+                state="visible", timeout=8000)
+        except Exception:  # noqa: BLE001
+            pass
         self._dump(page, "probe_compose_dom")
 
-        # 2) 件名・本文にセンチネルを入力（送信されても内容で検知できるように）。
+        # 2a) 求人の添付（必須の場合がある）。先頭の求人を選ぶベストエフォート。
+        try:
+            attach = page.get_by_role("button", name=re.compile("求人を選択|添付する求人"))
+            if attach.count() > 0:
+                attach.first.click(timeout=4000)
+                self.client.human_delay(1.0, 2.0)
+                # 一覧の先頭求人を選ぶ（ラジオ/行）。
+                for s in ["[role='dialog'] input[type='radio']",
+                          "[role='dialog'] tbody tr", "[role='dialog'] li"]:
+                    loc = page.locator(s)
+                    if loc.count() > 0:
+                        loc.first.click(timeout=3000)
+                        break
+                # 選択確定ボタン。
+                for name in ["選択", "決定", "添付", "追加", "OK"]:
+                    b = page.get_by_role("button", name=name)
+                    if b.count() > 0:
+                        b.first.click(timeout=3000)
+                        break
+                self._log("求人を添付（ベストエフォート）。")
+                self.client.human_delay(1.0, 2.0)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"求人添付をスキップ: {e}")
+
+        # 2b) 件名・本文にセンチネルを入力（送信されても内容で検知できるように）。
         self._fill_first(
             page,
-            [self.sel.scout_subject, "input[name='subject']", "input[name='title']",
-             "input[placeholder*='件名']", "input[type='text']"],
+            ["input[placeholder='件名']", self.sel.scout_subject,
+             "input[name='subject']", "input[type='text']"],
             f"{SENTINEL} 件名",
             "件名",
         )
         self._fill_first(
             page,
-            [self.sel.scout_body, "textarea[name='body']", "textarea[name='message']",
-             "textarea[placeholder*='本文']", "textarea", "[contenteditable='true']"],
+            ["textarea[placeholder='スカウト本文']", "textarea[placeholder*='本文']",
+             self.sel.scout_body, "textarea", "[contenteditable='true']"],
             f"{SENTINEL} 本文サンプル",
             "本文",
         )
