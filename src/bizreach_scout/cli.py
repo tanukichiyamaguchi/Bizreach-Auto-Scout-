@@ -228,6 +228,39 @@ def login(headless: bool) -> None:
         client.close()
 
 
+@cli.command(name="probe-send")
+@click.option("--mrccid", help="偵察対象の候補者mrccid。未指定なら検索先頭の候補者を使う")
+@click.option("--search-url", help="bizreach の検索結果URL（mrccid未指定時に使用）")
+@click.option("--headless/--no-headless", default=True, help="ブラウザをヘッドレスで起動")
+def probe_send(mrccid: str | None, search_url: str | None, headless: bool) -> None:
+    """スカウト送信フローを安全に偵察する（送信APIとセレクタ特定用・実送信なし）。
+
+    送信ボタン押下の直前に /api/ POST のブロックを武装するため、実際の送信は
+    絶対に行われません。data/exports に DOM・スクショ・捕捉した送信POSTを保存します。
+    """
+    from .bizreach.api import BizreachApi
+    from .bizreach.client import BizreachClient
+    from .bizreach.send_probe import SendProbe
+
+    client = BizreachClient(headless=headless).start()
+    try:
+        client.ensure_logged_in()
+        target = mrccid
+        if not target:
+            if not search_url:
+                raise click.UsageError("--mrccid か --search-url のどちらかを指定してください。")
+            api = BizreachApi(client)
+            target = next(iter(api.iter_candidate_ids(search_url, 1)), None)
+            if not target:
+                click.echo("検索から候補者を取得できませんでした。")
+                return
+            click.echo(f"検索先頭の候補者を使用: mrccid={target}")
+        SendProbe(client).run(target, search_url=search_url)
+        click.echo("偵察完了。data/exports の probe_* を確認してください（実送信はしていません）。")
+    finally:
+        client.close()
+
+
 @cli.command()
 def doctor() -> None:
     """完全自動運用の起動前チェック（環境・設定・依存を点検）。"""
