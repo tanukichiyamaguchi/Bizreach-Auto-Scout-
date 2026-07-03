@@ -47,6 +47,43 @@ def test_generate_produces_two_messages():
     assert scout.tone_key == "early30s"
 
 
+def _capturing_client(captured: dict):
+    block = SimpleNamespace(type="tool_use", name="emit_scout", input=VALID_INPUT, id="t1")
+    resp = SimpleNamespace(content=[block])
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return resp
+
+    return SimpleNamespace(messages=SimpleNamespace(create=_create))
+
+
+def test_extended_thinking_enabled_passes_thinking_and_auto_tool_choice():
+    captured: dict = {}
+    gen = ScoutGenerator(client=_capturing_client(captured), model="test-model")
+    orig = gen._settings.thinking_budget_tokens
+    gen._settings.thinking_budget_tokens = 8000
+    try:
+        gen.generate(make_candidate())
+    finally:
+        gen._settings.thinking_budget_tokens = orig
+    assert captured["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    assert captured["tool_choice"] == {"type": "auto"}  # 拡張思考時は強制tool_choice不可
+
+
+def test_thinking_disabled_uses_forced_tool_choice():
+    captured: dict = {}
+    gen = ScoutGenerator(client=_capturing_client(captured), model="test-model")
+    orig = gen._settings.thinking_budget_tokens
+    gen._settings.thinking_budget_tokens = 0
+    try:
+        gen.generate(make_candidate())
+    finally:
+        gen._settings.thinking_budget_tokens = orig
+    assert "thinking" not in captured
+    assert captured["tool_choice"] == {"type": "tool", "name": "emit_scout"}
+
+
 def test_subject_normalized_when_prefix_missing():
     payload = dict(VALID_INPUT, subject_first="ご経歴に惹かれて限定オファー")
     gen = ScoutGenerator(client=_fake_client(payload), model="test-model")

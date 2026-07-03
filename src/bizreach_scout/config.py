@@ -36,7 +36,11 @@ class Settings(BaseSettings):
 
     # Anthropic（API キーは ANTHROPIC_API_KEY を直接参照）
     model: str = "claude-opus-4-8"
-    max_tokens: int = 4096
+    max_tokens: int = 16000
+    # 拡張思考(extended thinking)。>0 で有効化し、その token 数だけ内部推論に使う。
+    # 必ず max_tokens より小さくすること（max_tokens は思考+出力の合計上限）。
+    # 0 にすると拡張思考オフ（従来の標準モード）。
+    thinking_budget_tokens: int = 8000
 
     # 送信制御
     dry_run: bool = True

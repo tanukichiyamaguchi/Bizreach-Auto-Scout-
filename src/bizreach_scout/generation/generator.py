@@ -55,14 +55,22 @@ class ScoutGenerator:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
     def _call(self, system: str, messages: list[dict]):
-        return self.client.messages.create(
-            model=self._model,
-            max_tokens=self._settings.max_tokens,
-            system=system,
-            messages=messages,
-            tools=[EMIT_SCOUT_TOOL],
-            tool_choice={"type": "tool", "name": "emit_scout"},
-        )
+        kwargs: dict = {
+            "model": self._model,
+            "max_tokens": self._settings.max_tokens,
+            "system": system,
+            "messages": messages,
+            "tools": [EMIT_SCOUT_TOOL],
+        }
+        budget = self._settings.thinking_budget_tokens
+        if budget and budget > 0:
+            # 拡張思考(extended thinking)を有効化。
+            # 注: 拡張思考時は強制 tool_choice(type=tool/any) が使えないため auto にする。
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            kwargs["tool_choice"] = {"type": "auto"}
+        else:
+            kwargs["tool_choice"] = {"type": "tool", "name": "emit_scout"}
+        return self.client.messages.create(**kwargs)
 
     @staticmethod
     def _extract_tool_input(resp) -> tuple[dict, object]:
