@@ -117,8 +117,13 @@ class BizreachClient:
             n = link.count()
             if n > 0:
                 logger.info("担当グループを選択します（候補 %d 件の先頭）。", n)
-                link.first.click()
-                self.page.wait_for_load_state("networkidle")
+                link.first.click(timeout=15000)
+                # networkidle はこのサイトの常時通信(計測/ロングポーリング)で30秒
+                # 到達せずタイムアウトするため使わない。load を短時間だけ待って続行する。
+                try:
+                    self.page.wait_for_load_state("load", timeout=10000)
+                except Exception:  # noqa: BLE001
+                    pass
                 self.human_delay()
             else:
                 logger.info("グループ選択リンクが見つかりません（選択済み/不要の可能性）。")
@@ -143,7 +148,16 @@ class BizreachClient:
         except Exception as e:  # noqa: BLE001
             logger.info("ログインボタンをクリックできず(%s)。Enterで送信します。", e)
             self.page.press(self.sel.login_password, "Enter")
-        self.page.wait_for_load_state("networkidle")
+        # networkidle はこのサイトの常時通信で到達せず30秒待つことがあるため使わない。
+        # 成否はログイン済みマーカーで判定する（描画に少し猶予を与える）。
+        try:
+            self.page.wait_for_load_state("load", timeout=10000)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.page.locator(self.sel.logged_in_marker).first.wait_for(timeout=10000)
+        except Exception:  # noqa: BLE001
+            pass
         self.human_delay()
         if self.page.locator(self.sel.logged_in_marker).count() == 0:
             logger.warning(
