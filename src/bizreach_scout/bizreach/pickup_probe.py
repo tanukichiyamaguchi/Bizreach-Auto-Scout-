@@ -26,21 +26,48 @@ class PickupProbe:
         responses: list = []
         requests: list = []
 
+        def _watched(url: str) -> bool:
+            # 旧スカウト系(/ajax/)と新API(/api/)の両方を対象にする。
+            return ("cr-support.jp/api/" in url or "cr-support.jp/ajax/" in url)
+
         def on_response(resp):
             try:
-                ct = (resp.headers or {}).get("content-type", "")
-                if "json" in ct.lower() and "/api/" in resp.url:
+                if _watched(resp.url):
                     responses.append(resp)
             except Exception:  # noqa: BLE001
                 pass
 
         def on_request(req):
             try:
-                if "/api/" in req.url:
+                if _watched(req.url):
                     requests.append(req)
             except Exception:  # noqa: BLE001
                 pass
 
+        # 送信ブロック: freescout操作中の実送信を防ぐ（POSTを記録して中断）。
+        self._blocked: list = []
+        self._arm = False
+
+        # 送信っぽいURLだけ中断する（作成画面のロードPOSTは通す）。
+        send_pat = ("offer", "scout", "send", "pickup", "message", "platinum")
+
+        def handle_route(route):
+            r = route.request
+            try:
+                if (self._arm and r.method == "POST" and _watched(r.url)
+                        and any(k in r.url.lower() for k in send_pat)):
+                    try:
+                        pd = r.post_data or ""
+                    except Exception:  # noqa: BLE001
+                        pd = ""
+                    self._blocked.append((r.url, pd))
+                    route.abort()
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+            route.continue_()
+
+        page.route("**/*", handle_route)
         page.on("response", on_response)
         page.on("request", on_request)
 
@@ -69,7 +96,52 @@ class PickupProbe:
         # ピックアップ候補者をDOMから抽出し、candidateId→mrccid の橋渡しを検証する。
         self._resolve_pickup_candidates(page)
 
+        # freescout（無料スカウト）リンクを押して作成/送信フローを捕捉（送信は中断）。
+        self._probe_freescout(page)
+
         self._dump(page, requests, responses)
+
+    def _probe_freescout(self, page) -> None:
+        """最初の freescout リンクを押し、無料スカウトの作成/送信フローを捕捉する。
+
+        送信ブロックを武装するため、送信っぽいPOSTは中断され実送信されない。
+        作成画面(ライトボックス/別ページ)のDOM・スクショと、捕捉した送信POSTを保存する。
+        """
+        try:
+            loc = page.locator("a.freescout")
+            n = loc.count()
+            if n == 0:
+                (self.out / "pickup_freescout.txt").write_text(
+                    "a.freescout リンクが見つかりません。", encoding="utf-8")
+                return
+            self._arm = True  # 以降の送信POSTは中断
+            try:
+                loc.first.click(timeout=6000)
+            except Exception as e:  # noqa: BLE001
+                logger.info("[pickup] freescoutクリックで例外: %s", e)
+            self.client.human_delay(2.0, 3.5)
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:  # noqa: BLE001
+                pass
+            self.client.human_delay(1.0, 2.0)
+            try:
+                (self.out / "pickup_freescout_dom.html").write_text(
+                    page.content(), encoding="utf-8")
+                page.screenshot(path=str(self.out / "pickup_freescout_dom.png"),
+                                full_page=True)
+            except Exception:  # noqa: BLE001
+                pass
+            lines = [f"URL(現在): {page.url}", f"freescoutリンク数: {n}", ""]
+            lines.append("== 中断した送信候補POST ==")
+            for url, pd in self._blocked:
+                lines.append(f"POST {url}\n{pd[:3000]}\n{'-'*50}")
+            (self.out / "pickup_freescout.txt").write_text("\n".join(lines), encoding="utf-8")
+            logger.info("[pickup] freescout捕捉: 中断POST %d 件。", len(self._blocked))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[pickup] freescout探索に失敗: %s", e)
+        finally:
+            self._arm = False
 
     def _resolve_pickup_candidates(self, page, rrsc: str = "3444981") -> None:
         """mypageのピックアップ候補者(data-resume-id=数値candidateId)を抽出し、
