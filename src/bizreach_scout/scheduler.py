@@ -52,15 +52,14 @@ def run_due_resends(repo: Repository, sender, now: datetime | None = None) -> Re
 
         mno = row["member_no"]
         candidate = repo.load_candidate(mno)
-        url = candidate.profile_url if candidate else ""
 
-        if sender is None or not url:
+        if sender is None or candidate is None:
             report.skipped += 1
-            reason = "no sender" if sender is None else "no profile_url"
+            reason = "no sender" if sender is None else "候補者データ無し"
             logger.info("再送スキップ(%s): %s", reason, mno)
             continue
 
-        outcome = sender.send_scout(url, row["subject"], row["body"])
+        outcome = sender.send_scout(candidate, row["subject"], row["body"])
         if outcome.status == "sent":
             repo.mark_sent(mno, "resend", settings.resend_after_days)
             report.sent += 1

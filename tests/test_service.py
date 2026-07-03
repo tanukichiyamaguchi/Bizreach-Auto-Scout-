@@ -96,18 +96,20 @@ def patched(monkeypatch):
     monkeypatch.setattr(service, "run_due_resends", fake_run_due_resends)
 
     # ブラウザ系（service 内で遅延 import される）を差し替える。
+    import bizreach_scout.bizreach.api as api_mod
+    import bizreach_scout.bizreach.api_sender as api_sender_mod
     import bizreach_scout.bizreach.client as client_mod
-    import bizreach_scout.bizreach.sender as sender_mod
     import bizreach_scout.ingest.bizreach_api_source as source_mod
 
     monkeypatch.setattr(client_mod, "BizreachClient", FakeClient)
+    monkeypatch.setattr(api_mod, "BizreachApi", lambda client: SimpleNamespace(client=client))
 
-    def fake_sender_factory(client, *args, **kwargs):
-        s = SimpleNamespace(client=client)
+    def fake_sender_factory(api, *args, **kwargs):
+        s = SimpleNamespace(api=api)
         calls["sender"].append(s)
         return s
 
-    monkeypatch.setattr(sender_mod, "BizreachSender", fake_sender_factory)
+    monkeypatch.setattr(api_sender_mod, "ApiScoutSender", fake_sender_factory)
 
     def fake_source_factory(search_url=None, max_candidates=50, **kwargs):
         s = SimpleNamespace(search_url=search_url, max_candidates=max_candidates)

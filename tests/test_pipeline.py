@@ -30,8 +30,8 @@ class FakeSender:
         self.status = status
         self.sent = []
 
-    def send_scout(self, url, subject, body):
-        self.sent.append((url, subject, body))
+    def send_scout(self, candidate, subject, body):
+        self.sent.append((candidate.profile_url, subject, body))
         return SimpleNamespace(status=self.status, detail="")
 
 

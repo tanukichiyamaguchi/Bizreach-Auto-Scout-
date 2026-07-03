@@ -115,13 +115,14 @@ def run(source: str, input_path: str | None, search_url: str | None,
 
     try:
         if source == "bizreach":  # 検索取得・送信ともにブラウザが必要
+            from .bizreach.api import BizreachApi
+            from .bizreach.api_sender import ApiScoutSender
             from .bizreach.client import BizreachClient
-            from .bizreach.sender import BizreachSender
 
             client = BizreachClient(headless=headless).start()
             client.ensure_logged_in()
             if send:
-                sender = BizreachSender(client)
+                sender = ApiScoutSender(BizreachApi(client))
 
         src = _build_source(source, input_path, search_url, max_candidates, client=client)
         pipeline = ScoutPipeline(repo=repo, generator=generator, sender=sender)
@@ -145,12 +146,13 @@ def run_resends(send: bool, headless: bool) -> None:
     sender = None
     try:
         if send:
+            from .bizreach.api import BizreachApi
+            from .bizreach.api_sender import ApiScoutSender
             from .bizreach.client import BizreachClient
-            from .bizreach.sender import BizreachSender
 
             client = BizreachClient(headless=headless).start()
             client.ensure_logged_in()
-            sender = BizreachSender(client)
+            sender = ApiScoutSender(BizreachApi(client))
         report = run_due_resends(repo, sender)
         click.echo(report.summary())
     finally:

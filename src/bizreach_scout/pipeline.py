@@ -155,12 +155,8 @@ class ScoutPipeline:
                         self.settings.max_sends_per_run, mno)
             self.repo.mark_skipped(mno, "first", "max_sends_per_run reached")
             return
-        if not candidate.profile_url:
-            logger.info("プロフィールURLが無いため自動送信不可（生成のみ）: %s", mno)
-            self.repo.mark_skipped(mno, "first", "no profile_url for sending")
-            return
 
-        outcome = self.sender.send_scout(candidate.profile_url, subject, body)
+        outcome = self.sender.send_scout(candidate, subject, body)
         if outcome.status == "sent":
             self.repo.mark_sent(mno, "first", self.settings.resend_after_days)
             report.sent += 1

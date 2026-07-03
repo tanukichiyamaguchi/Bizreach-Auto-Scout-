@@ -66,8 +66,12 @@ def run_cycle(
     try:
         client = BizreachClient(headless=headless).start()
         client.ensure_logged_in()
-        # スカウト送信APIは未特定のため、現状は文面生成・保存まで（送信は保留）。
-        sender = None
+        # 送信はビズリーチ内部API（プラチナスカウト主・両会員種別対応）で行う。
+        # dry_run は設定(BIZSCOUT_DRY_RUN)に従い、kill switch・残数・上限も尊重する。
+        from .bizreach.api import BizreachApi
+        from .bizreach.api_sender import ApiScoutSender
+
+        sender = ApiScoutSender(BizreachApi(client)) if send else None
 
         # --- 初回送信パイプライン（search_url がある場合のみ。複数URL対応）---
         urls = parse_search_urls(search_url)
