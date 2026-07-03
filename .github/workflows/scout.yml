@@ -121,8 +121,18 @@ jobs:
         continue-on-error: true
         run: bizscout doctor
 
-      - name: Run scout (1サイクル)
-        if: env.RUN_MODE != 'probe-send'
+      # 本日のピックアップ求人（無料枠・本命）。schedule と mode=pickup で実行。
+      # 本命なので先に実行し、失敗しても検索スカウトは続行させる（continue-on-error）。
+      - name: Run pickup (本日のピックアップ・無料枠・本命)
+        if: env.RUN_MODE == 'pickup' || github.event_name == 'schedule'
+        continue-on-error: true
+        run: |
+          echo "本日のピックアップ求人へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX）。"
+          bizscout run-pickup --kind job --max "$RUN_MAX"
+
+      # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
+      - name: Run scout (検索スカウト＋再送)
+        if: env.RUN_MODE == 'scout' || github.event_name == 'schedule'
         run: |
           echo "DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX / SEARCH_URL set: $([ -n "$SEARCH_URL" ] && echo yes || echo no)"
           if [ -n "$SEARCH_URL" ]; then
@@ -159,13 +169,6 @@ jobs:
       - name: Probe pickup (実送信なし)
         if: env.RUN_MODE == 'probe-pickup'
         run: bizscout probe-pickup
-
-      # 本日のピックアップ求人（無料枠）へ送信。BIZSCOUT_DRY_RUN を尊重。
-      - name: Run pickup (本日のピックアップ・無料枠)
-        if: env.RUN_MODE == 'pickup'
-        run: |
-          echo "本日のピックアップ求人へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN）。"
-          bizscout run-pickup --kind job --max "$RUN_MAX"
 
       # ピックアップ送信API(/v2/scouts/pickup)の dryRun 検証（対象条件を無視・実送信なし）。
       - name: Test pickup send (dryRun・実送信なし)
