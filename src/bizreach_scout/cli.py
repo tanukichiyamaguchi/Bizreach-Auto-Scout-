@@ -162,7 +162,8 @@ def run_pickup(kind: str, max_candidates: int, send: bool, headless: bool) -> No
         client.ensure_logged_in()
         sender = ApiScoutSender(BizreachApi(client), pickup=True) if send else None
         source = BizreachPickupSource(max_candidates=max_candidates, kind=kind, client=client)
-        pipeline = ScoutPipeline(repo=repo, sender=sender)
+        # ピックアップは会員ステータス条件を適用しない（ユーザー指定・本命リストのため）。
+        pipeline = ScoutPipeline(repo=repo, sender=sender, apply_status_filter=False)
         report = pipeline.run(source, send=send)
         click.echo(report.summary())
     finally:

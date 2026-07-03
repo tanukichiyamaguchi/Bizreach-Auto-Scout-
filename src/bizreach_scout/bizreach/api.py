@@ -33,6 +33,36 @@ _GRADE_MAP = {
 }
 
 
+def _map_grade(raw: str) -> Education:
+    """schoolGrade(英語enum)を Education 水準へ写像する。
+
+    ビズリーチの enum を _GRADE_MAP で網羅しきれない（例: 高専・専門・短大卒は
+    Associate/Vocational とは別の値で返る）ため、未知値はキーワードで水準を推定する。
+    「大学卒以上」を取りこぼさない（=誤って不明/下位に落とさない）ことを最優先に、
+    上位学歴から順に判定する。高専・専門・短大卒は大学卒未満として扱う。
+    真に判別不能な値のみ unknown を返す。
+    """
+    if not raw:
+        return Education.unknown
+    exact = _GRADE_MAP.get(raw)
+    if exact is not None:
+        return exact
+    low = raw.lower()
+    if any(k in low for k in ("doctor", "phd", "doctorate")):
+        return Education.doctor
+    if "master" in low or "postgrad" in low or ("graduate" in low and "undergrad" not in low):
+        return Education.master
+    if any(k in low for k in ("bachelor", "university", "undergrad")):
+        return Education.bachelor
+    if any(k in low for k in ("associate", "junior", "technical")):
+        return Education.associate  # 短大・高専相当（大学卒未満）
+    if any(k in low for k in ("vocational", "special", "college", "professional")):
+        return Education.vocational  # 専門相当（大学卒未満）
+    if "high" in low and "school" in low:
+        return Education.high_school
+    return Education.unknown
+
+
 def _income_label(code: str | None) -> str:
     if not code:
         return ""
@@ -99,12 +129,11 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     edus = resume.get("educations") or []
     if edus:
         raw_grade = edus[0].get("schoolGrade", "")
-        education = _GRADE_MAP.get(raw_grade, Education.unknown)
+        education = _map_grade(raw_grade)
         university = _ja(edus[0].get("name"))
-        # 学歴レコードはあるのに未マッピングで不明になる＝_GRADE_MAP の取りこぼし。
-        # 本当に空欄(edus 自体が無い)のか、値が未対応なのかをログで切り分ける。
+        # キーワード推定でも判別できない値のみ可視化（要マッピング追加のサイン）。
         if education is Education.unknown and raw_grade:
-            logger.info("未マッピングの学歴グレード: %r（mrccid=%s 大学=%s）",
+            logger.info("未対応の学歴グレード（要マッピング確認）: %r（mrccid=%s 大学=%s）",
                         raw_grade, mrccid or member_no, university)
 
     # --- 職歴 ---

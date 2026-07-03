@@ -101,3 +101,19 @@ def test_status_flags_helper():
     c = make_candidate(intention=["Hot", "Will"], resume_updated_status="New",
                        contract_plan="Premium")
     assert c.status_flags() == {"hot", "will", "new", "premium"}
+
+
+def test_pickup_ignores_status_filter():
+    # ピックアップ(apply_status_filter=False)はステータス不問。他条件は満たす前提。
+    cand = make_candidate(intention=[], resume_updated_status="None", contract_plan="Free")
+    assert not check_eligibility(cand).eligible                      # 通常はステータスで落ちる
+    assert check_eligibility(cand, apply_status_filter=False).eligible  # ピックアップは通る
+
+
+def test_pickup_still_enforces_core_conditions():
+    # ステータス不問でも、学歴・性別などコア条件は常に適用する。
+    cand = make_candidate(education=Education.high_school, intention=[],
+                          resume_updated_status="None", contract_plan="Free")
+    result = check_eligibility(cand, apply_status_filter=False)
+    assert not result.eligible
+    assert any("学歴" in r for r in result.failed)

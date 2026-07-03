@@ -78,12 +78,15 @@ class ScoutPipeline:
         repo: Repository | None = None,
         generator: ScoutGenerator | None = None,
         sender=None,
+        apply_status_filter: bool = True,
     ):
         self.settings = get_settings()
         self.rules = scout_rules()
         self.repo = repo or Repository()
         self.generator = generator or ScoutGenerator()
         self.sender = sender  # BizreachSender or None（None なら生成のみ）
+        # ピックアップ求人は会員ステータス条件を適用しない（False で渡す）。
+        self.apply_status_filter = apply_status_filter
 
     def _send_delay(self) -> None:
         lo = self.settings.send_delay_min
@@ -130,7 +133,8 @@ class ScoutPipeline:
         sent_offset: int = 0,
     ) -> None:
         mno = candidate.member_no
-        elig = check_eligibility(candidate, self.rules)
+        elig = check_eligibility(candidate, self.rules,
+                                 apply_status_filter=self.apply_status_filter)
         self.repo.upsert_candidate(candidate, elig)
 
         if not elig.eligible:
