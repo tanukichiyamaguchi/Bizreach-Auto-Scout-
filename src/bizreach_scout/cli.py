@@ -316,8 +316,9 @@ def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
             dry_run=True,
         )
         click.echo(f"\n[dryRun送信結果] endpoint={result.get('endpoint')} {result}")
-        if result.get("status") == 200:
-            click.echo(f"\n✅ 送信APIの検証に成功しました（{result.get('endpoint')}・実送信なし）。")
+        if result.get("status") in (200, 201):
+            click.echo(f"\n✅ 送信APIの検証に成功しました（{result.get('endpoint')}"
+                       f"・status={result.get('status')}・実送信なし）。")
         elif result.get("endpoint") == "skip":
             click.echo(f"\nℹ️ この候補者は送信対象外でした（{result.get('skipped')}）。"
                        "別の候補者で再確認してください。")

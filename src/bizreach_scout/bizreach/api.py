@@ -415,10 +415,15 @@ class BizreachApi:
         return out
 
     @staticmethod
-    def _log_send_result(kind: str, mrccid: str, dry_run: bool, out: dict) -> None:
-        if out.get("status") == 200:
-            logger.info("%sスカウト %s mrccid=%s (dryRun=%s)",
-                        kind, "検証OK" if dry_run else "完了", mrccid, dry_run)
+    def _ok(out: dict) -> bool:
+        """送信成功の判定。プラチナは 201 Created、通常は 200 を返す。"""
+        return out.get("status") in (200, 201)
+
+    def _log_send_result(self, kind: str, mrccid: str, dry_run: bool, out: dict) -> None:
+        if self._ok(out):
+            logger.info("%sスカウト %s mrccid=%s (dryRun=%s, status=%s)",
+                        kind, "検証OK" if dry_run else "完了", mrccid, dry_run,
+                        out.get("status"))
         else:
             logger.warning("%sスカウト送信に失敗 mrccid=%s status=%s body=%s",
                            kind, mrccid, out.get("status"), out)
@@ -435,8 +440,7 @@ class BizreachApi:
         out = self.send_platinum_scout(job_id, mrccid, subject, body,
                                        dry_run, search_id, reminder)
         out["endpoint"] = label
-        if not dry_run and out.get("status") == 200 \
-                and self._platinum_remaining is not None:
+        if not dry_run and self._ok(out) and self._platinum_remaining is not None:
             self._platinum_remaining -= 1
         out["platinum_remaining"] = self._platinum_remaining
         return out
@@ -444,13 +448,12 @@ class BizreachApi:
     def route_scout(self, job_id: str, mrccid: str, subject: str, body: str,
                     dry_run: bool = True, search_id: str | None = None,
                     reminder: dict | None = None) -> dict:
-        """会員種別に応じて通常/プラチナへ振り分けて送信する。
+        """スカウトを送信する（プラチナスカウトが主・両会員種別に対応）。
 
-        checkCandidates の error を見て振り分ける:
-          - ClassMismatch     → プラチナスカウト（/platinum・token不要）
-          - その他の error     → スキップ（既送信・対象外など）
-          - error なし        → 通常スカウト（/candidates）。失敗時はプラチナへフォールバック。
-        戻り値に "endpoint" を付与する。
+        実運用はプラチナスカウト（/platinum・token不要）で、求人 scout_job_id を使えば
+        Talent・HighClass の両方に送れる。checkCandidates は主に除外判定に使う:
+          - error が ClassMismatch / なし → プラチナで送信
+          - その他の error（既送信など）   → スキップ
         """
         check = self.check_candidates(job_id, [mrccid])
         err = None
@@ -459,26 +462,10 @@ class BizreachApi:
                 err = c.get("error")
                 break
 
-        if err == "ClassMismatch":
-            return self._platinum_send_guarded(job_id, mrccid, subject, body,
-                                               dry_run, search_id, reminder)
-        if err:
+        # ClassMismatch はプラチナで送るので除外しない。それ以外の error はスキップ。
+        if err and err != "ClassMismatch":
             logger.info("送信不可のためスキップ mrccid=%s error=%s", mrccid, err)
             return {"status": 0, "skipped": err, "endpoint": "skip"}
 
-        # error なし → 通常スカウト。tokenが必要でパスが未確定のため、失敗時は
-        # プラチナ（token不要・ユーザーの実運用と一致）にフォールバックする。
-        token = self.create_one_time_token()
-        out = self.send_scout(job_id, mrccid, subject, body,
-                              dry_run, search_id, reminder, token)
-        out["endpoint"] = "candidates"
-        if out.get("status") != 200:
-            logger.info("通常送信が失敗(status=%s)。プラチナにフォールバック mrccid=%s",
-                        out.get("status"), mrccid)
-            fb = self._platinum_send_guarded(job_id, mrccid, subject, body,
-                                             dry_run, search_id, reminder,
-                                             label="platinum(fallback)")
-            if fb.get("status") == 200 or fb.get("skipped"):
-                fb["candidates_error"] = out
-                return fb
-        return out
+        return self._platinum_send_guarded(job_id, mrccid, subject, body,
+                                           dry_run, search_id, reminder)

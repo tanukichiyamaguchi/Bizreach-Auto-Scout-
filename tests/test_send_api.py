@@ -140,26 +140,29 @@ def test_route_classmismatch_goes_platinum():
     assert req.calls[-1]["url"].endswith("/scouts/platinum")
 
 
-def test_route_no_error_goes_candidates():
+def test_route_no_error_goes_platinum():
+    # 実運用はプラチナスカウト。error無し（Talent等）でもプラチナで送る。
     resp = {"checkCandidates": {"candidates": [{"mrccid": "TL", "error": None}]}}
     api, req = _api(resp)
     out = api.route_scout("J", "TL", "s", "b", dry_run=True)
-    assert out["endpoint"] == "candidates"
-    assert req.calls[-1]["url"].endswith("/scouts/candidates")
+    assert out["endpoint"] == "platinum"
+    assert req.calls[-1]["url"].endswith("/scouts/platinum")
+    # 通常(/candidates)は叩かない。
+    assert all("scouts/candidates" not in c["url"] for c in req.calls)
 
 
-def test_route_candidates_failure_falls_back_to_platinum():
-    # 通常送信が失敗（token未確定などで400）→ プラチナにフォールバックして成功。
+def test_platinum_201_is_success_and_decrements():
+    # プラチナは 201 Created で成功。本送信で残数を減算する。
     resp = {
-        "checkCandidates": {"candidates": [{"mrccid": "TL", "error": None}]},
-        "scouts/candidates": (400, {"code": "ValidationViolated"}),
-        "scouts/platinum": (200, {"result": "ok"}),
+        "checkCandidates": {"candidates": [{"mrccid": "HC", "error": "ClassMismatch"}]},
+        "platinum/holders": (200, {"count": 4}),  # より具体的なキーを先に
+        "scouts/platinum": (201, {}),
     }
-    api, req = _api(resp)
-    out = api.route_scout("J", "TL", "s", "b", dry_run=True)
-    assert out["endpoint"] == "platinum(fallback)"
-    assert out["status"] == 200
-    assert "candidates_error" in out
+    api, _ = _api(resp)
+    out = api.route_scout("J", "HC", "s", "b", dry_run=False)
+    assert out["status"] == 201
+    assert out["endpoint"] == "platinum"
+    assert out["platinum_remaining"] == 3  # 4 -> 3
 
 
 def test_route_other_error_skips():
