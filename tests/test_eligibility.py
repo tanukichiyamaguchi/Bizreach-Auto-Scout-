@@ -49,3 +49,55 @@ def test_unknown_fields_need_confirmation():
 def test_master_education_meets_bachelor_requirement():
     result = check_eligibility(make_candidate(education=Education.master))
     assert result.eligible
+
+
+# --- 会員ステータス条件（新着/更新/HOT/WILL/プレミアムのいずれか）---------------
+
+def test_no_target_status_fails():
+    # どのステータスにも該当しない候補者は対象外。
+    result = check_eligibility(
+        make_candidate(intention=[], resume_updated_status="None",
+                       contract_plan="Free")
+    )
+    assert not result.eligible
+    assert any("ステータス" in r for r in result.failed)
+
+
+def test_hot_status_passes():
+    result = check_eligibility(
+        make_candidate(intention=["Hot"], resume_updated_status="None",
+                       contract_plan="Free")
+    )
+    assert result.eligible
+
+
+def test_premium_only_passes():
+    # HOT/WILLでなくてもプレミアム会員なら対象。
+    result = check_eligibility(
+        make_candidate(intention=[], resume_updated_status="None",
+                       contract_plan="Premium")
+    )
+    assert result.eligible
+
+
+def test_new_and_updated_status_pass():
+    for status in ("New", "Updated"):
+        result = check_eligibility(
+            make_candidate(intention=[], resume_updated_status=status,
+                           contract_plan="Free")
+        )
+        assert result.eligible, status
+
+
+def test_highclass_is_in_scope():
+    # HighClass も対象（Talentと区別しない）。ステータス条件を満たせば eligible。
+    result = check_eligibility(
+        make_candidate(candidate_class="HighClass", intention=["Will"])
+    )
+    assert result.eligible
+
+
+def test_status_flags_helper():
+    c = make_candidate(intention=["Hot", "Will"], resume_updated_status="New",
+                       contract_plan="Premium")
+    assert c.status_flags() == {"hot", "will", "new", "premium"}

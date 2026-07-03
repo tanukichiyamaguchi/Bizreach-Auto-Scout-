@@ -54,4 +54,14 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None) -> Eligib
     elif tenure < min_years:
         failed.append(f"同一企業での勤続が{min_years}年未満（{tenure}年）")
 
+    # --- 会員ステータス（新着/更新/HOT/WILL/プレミアムのいずれか）-------------
+    require_status = cfg.get("require_any_status", []) or []
+    if require_status:
+        matched = candidate.status_flags() & set(require_status)
+        if not matched:
+            _labels = {"new": "新着", "updated": "更新", "hot": "HOT",
+                       "will": "WILL", "premium": "プレミアム"}
+            need = "/".join(_labels.get(s, s) for s in require_status)
+            failed.append(f"会員ステータスが対象外（{need} のいずれにも該当せず）")
+
     return EligibilityResult(eligible=not failed, failed=failed)

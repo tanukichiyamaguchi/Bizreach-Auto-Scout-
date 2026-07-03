@@ -162,6 +162,10 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         summary=summary,
         raw_profile=raw_profile,
         source="bizreach",
+        intention=resume.get("intention") or [],
+        resume_updated_status=resume.get("resumeUpdatedStatus") or "",
+        contract_plan=resume.get("contractPlan") or "",
+        candidate_class=resume.get("candidateClass") or "",
     )
 
 

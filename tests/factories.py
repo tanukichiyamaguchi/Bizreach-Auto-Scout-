@@ -22,6 +22,8 @@ def make_candidate(**overrides) -> Candidate:
         salary_current="850万円",
         salary_desired="1000万円以上",
         summary="新規開拓で全社表彰2回。チーム6名のマネジメント経験あり。",
+        intention=["Will"],  # 既定で対象ステータス（WILL）を満たす
+        candidate_class="Talent",
     )
     base.update(overrides)
     return Candidate(**base)

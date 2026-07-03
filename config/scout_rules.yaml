@@ -10,6 +10,11 @@ eligibility:
   min_same_company_years: 3   # 3年以上の同じ会社での勤務歴
   required_gender: male       # 男性
   required_education: bachelor # 大学・大学院卒業以上（bachelor 以上）
+  # 会員ステータス条件: 以下のいずれかに該当する候補者のみ対象（OR条件）。
+  #   new(新着) / updated(更新) / hot(HOT) / will(WILL) / premium(プレミアム会員)
+  # 会員種別(Talent/HighClass)は両方対象（送信APIは自動振り分け）。
+  # 空リスト [] にするとこの条件を無効化（全員対象）。
+  require_any_status: [new, updated, hot, will, premium]
   # 上記を満たさない場合の挙動: skip(送信せず要確認リストへ) / send(警告のみ)
   on_ineligible: skip
 
