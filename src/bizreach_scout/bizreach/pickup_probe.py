@@ -44,30 +44,7 @@ class PickupProbe:
             except Exception:  # noqa: BLE001
                 pass
 
-        # 送信ブロック: freescout操作中の実送信を防ぐ（POSTを記録して中断）。
-        self._blocked: list = []
-        self._arm = False
-
-        # 送信っぽいURLだけ中断する（作成画面のロードPOSTは通す）。
-        send_pat = ("offer", "scout", "send", "pickup", "message", "platinum")
-
-        def handle_route(route):
-            r = route.request
-            try:
-                if (self._arm and r.method == "POST" and _watched(r.url)
-                        and any(k in r.url.lower() for k in send_pat)):
-                    try:
-                        pd = r.post_data or ""
-                    except Exception:  # noqa: BLE001
-                        pd = ""
-                    self._blocked.append((r.url, pd))
-                    route.abort()
-                    return
-            except Exception:  # noqa: BLE001
-                pass
-            route.continue_()
-
-        page.route("**/*", handle_route)
+        self._responses = responses  # freescout の /ajax/ レスポンス参照用
         page.on("response", on_response)
         page.on("request", on_request)
 
@@ -102,29 +79,39 @@ class PickupProbe:
         self._dump(page, requests, responses)
 
     def _probe_freescout(self, page) -> None:
-        """最初の freescout リンクを押し、無料スカウトの作成/送信フローを捕捉する。
+        """未送信の freescout リンクを押して作成フォーム(ライトボックス)を開き、構造を捕捉する。
 
-        送信ブロックを武装するため、送信っぽいPOSTは中断され実送信されない。
-        作成画面(ライトボックス/別ページ)のDOM・スクショと、捕捉した送信POSTを保存する。
+        フォームを開くだけ（入力・送信はしない）ので実送信は発生しない。作成フォームのDOM・
+        スクショと、freescoutが読み込むレジュメ(/ajax/)のレスポンスを保存する。
         """
+        lines = []
         try:
-            loc = page.locator("a.freescout")
+            # 送信済(SCOUTED)以外の freescout を選ぶ。
+            loc = page.locator('a.freescout:not([data-scount-status="SCOUTED"])')
+            if loc.count() == 0:
+                loc = page.locator("a.freescout")
             n = loc.count()
+            lines.append(f"freescout(未送信優先)リンク数: {n}")
             if n == 0:
                 (self.out / "pickup_freescout.txt").write_text(
                     "a.freescout リンクが見つかりません。", encoding="utf-8")
                 return
-            self._arm = True  # 以降の送信POSTは中断
+            rid = loc.first.get_attribute("data-resume-id")
+            lines.append(f"クリック対象 data-resume-id: {rid}")
             try:
                 loc.first.click(timeout=6000)
             except Exception as e:  # noqa: BLE001
-                logger.info("[pickup] freescoutクリックで例外: %s", e)
+                lines.append(f"クリック例外: {e}")
+            # ライトボックス(作成フォーム)の描画を待つ。
+            for sel in ("#jsi_lightbox", ".lightbox", "[class*='lightbox']",
+                        "textarea", "#jsi_form_lightbox_dialog"):
+                try:
+                    page.locator(sel).first.wait_for(state="visible", timeout=6000)
+                    lines.append(f"表示検出: {sel}")
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
             self.client.human_delay(2.0, 3.5)
-            try:
-                page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:  # noqa: BLE001
-                pass
-            self.client.human_delay(1.0, 2.0)
             try:
                 (self.out / "pickup_freescout_dom.html").write_text(
                     page.content(), encoding="utf-8")
@@ -132,16 +119,26 @@ class PickupProbe:
                                 full_page=True)
             except Exception:  # noqa: BLE001
                 pass
-            lines = [f"URL(現在): {page.url}", f"freescoutリンク数: {n}", ""]
-            lines.append("== 中断した送信候補POST ==")
-            for url, pd in self._blocked:
-                lines.append(f"POST {url}\n{pd[:3000]}\n{'-'*50}")
+            # freescout が読み込んだ /ajax/ レスポンス（レジュメ=mrccid の橋渡し候補）を保存。
+            idx = 0
+            for r in self._responses:
+                try:
+                    if "/ajax/" in r.url and "scout" in r.url.lower():
+                        body = r.text()
+                        (self.out / f"pickup_freescout_ajax_{idx:02d}.json").write_text(
+                            body[:1_000_000], encoding="utf-8")
+                        lines.append(f"AJAX保存: {r.url} ({len(body)}B) -> "
+                                     f"pickup_freescout_ajax_{idx:02d}.json")
+                        idx += 1
+                except Exception:  # noqa: BLE001
+                    continue
+            lines.append(f"現在URL: {page.url}")
             (self.out / "pickup_freescout.txt").write_text("\n".join(lines), encoding="utf-8")
-            logger.info("[pickup] freescout捕捉: 中断POST %d 件。", len(self._blocked))
+            logger.info("[pickup] freescoutフォームを捕捉（AJAX %d件）。", idx)
         except Exception as e:  # noqa: BLE001
             logger.warning("[pickup] freescout探索に失敗: %s", e)
-        finally:
-            self._arm = False
+            (self.out / "pickup_freescout.txt").write_text(
+                "\n".join(lines) + f"\n例外: {e}", encoding="utf-8")
 
     def _resolve_pickup_candidates(self, page, rrsc: str = "3444981") -> None:
         """mypageのピックアップ候補者(data-resume-id=数値candidateId)を抽出し、
