@@ -27,6 +27,7 @@ class BizreachPickupSource(CandidateSource):
         self.kind = kind  # "job"(本命=ピックアップ求人) / "candidate" / "both"
         self.headless = headless
         self._client = client
+        self._mypage_url = ""
 
     def _prefixes(self) -> list[str]:
         if self.kind == "candidate":
@@ -47,7 +48,8 @@ class BizreachPickupSource(CandidateSource):
         try:
             api = BizreachApi(client)
             page = client.page
-            page.goto(f"{api.base}/mypage/", wait_until="domcontentloaded")
+            self._mypage_url = f"{api.base}/mypage/"
+            page.goto(self._mypage_url, wait_until="domcontentloaded")
             try:
                 page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:  # noqa: BLE001
@@ -103,16 +105,44 @@ class BizreachPickupSource(CandidateSource):
             return None
 
     def _close_lightbox(self, page) -> None:
-        for sel in ("#jsi_lightbox_close", ".lightbox-close", "a.dialog-cancel",
-                    "[class*='lightbox'] .close"):
+        """レジュメのドロワー(#jsi_lapPageWrapper.showLapPage)/モーダルを閉じる。
+
+        閉じ損ねると次の候補の freescout クリックがドロワーに intercept されるため、
+        実際に閉じたかを確認し、残存する場合は mypage へ再遷移して確実に解消する。
+        """
+        clicked = False
+        # 実DOMで確認済みの閉じるコントロールを優先（ドロワー右上の×とモーダルの×）。
+        for sel in ("#jsi_btnClose", ".nsc-modal__close", "#jsi_lap_close_band",
+                    "#jsi_lightbox_close", ".lightbox-close", "a.dialog-cancel"):
             try:
                 loc = page.locator(sel)
                 if loc.count() > 0:
                     loc.first.click(timeout=2000)
-                    return
+                    clicked = True
+                    break
             except Exception:  # noqa: BLE001
                 continue
+        if not clicked:
+            try:
+                page.keyboard.press("Escape")
+            except Exception:  # noqa: BLE001
+                pass
+        self._ensure_drawer_closed(page)
+
+    def _ensure_drawer_closed(self, page) -> None:
+        """ドロワーが閉じたか確認し、残存すれば mypage へ再遷移して解消する。"""
         try:
-            page.keyboard.press("Escape")
+            drawer = page.locator("#jsi_lapPageWrapper.showLapPage")
+            try:
+                drawer.wait_for(state="detached", timeout=2000)
+            except Exception:  # noqa: BLE001
+                pass
+            if drawer.count() > 0 and self._mypage_url:
+                logger.info("レジュメドロワーが残存。mypage へ再遷移して解消します。")
+                page.goto(self._mypage_url, wait_until="domcontentloaded")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception:  # noqa: BLE001
             pass

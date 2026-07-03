@@ -94,3 +94,60 @@ def test_resolve_mrccid_none_when_no_copy_url():
 def test_default_kind_is_pickup_job():
     assert BizreachPickupSource()._prefixes() == ["pick-up-job"]
     assert BizreachPickupSource(kind="both")._prefixes() == ["pick-up-job", "pick-up-candidate"]
+
+
+class _ClosePage:
+    """閉じるコントロールのクリックと mypage 再遷移を記録するページのフェイク。"""
+
+    def __init__(self, drawer_stays_open: bool):
+        self.drawer_stays_open = drawer_stays_open
+        self.clicked: list[str] = []
+        self.goto_urls: list[str] = []
+        self.keyboard = SimpleNamespace(press=lambda k: self.clicked.append(f"key:{k}"))
+
+    def locator(self, sel):
+        page = self
+
+        class _L:
+            def count(self_inner):
+                if sel == "#jsi_lapPageWrapper.showLapPage":
+                    return 1 if page.drawer_stays_open else 0
+                # 閉じるボタンは常に存在する想定。
+                return 1
+
+            @property
+            def first(self_inner):
+                return self_inner
+
+            def click(self_inner, timeout=None):
+                page.clicked.append(sel)
+
+            def wait_for(self_inner, state=None, timeout=None):
+                pass
+
+        return _L()
+
+    def goto(self, url, wait_until=None):
+        self.goto_urls.append(url)
+
+    def wait_for_load_state(self, state=None, timeout=None):
+        pass
+
+
+def test_close_lightbox_clicks_drawer_close_button():
+    src = BizreachPickupSource(kind="job")
+    src._mypage_url = "https://cr-support.jp/mypage/"
+    page = _ClosePage(drawer_stays_open=False)
+    src._close_lightbox(page)
+    # 実DOMで確認済みのドロワー右上×を最優先でクリックする。
+    assert page.clicked[0] == "#jsi_btnClose"
+    assert page.goto_urls == []  # 閉じられたので再遷移不要
+
+
+def test_close_lightbox_renavigates_when_drawer_persists():
+    src = BizreachPickupSource(kind="job")
+    src._mypage_url = "https://cr-support.jp/mypage/"
+    page = _ClosePage(drawer_stays_open=True)
+    src._close_lightbox(page)
+    # ドロワーが残る場合は mypage へ再遷移して確実に解消する。
+    assert page.goto_urls == ["https://cr-support.jp/mypage/"]
