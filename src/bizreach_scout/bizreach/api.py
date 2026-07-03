@@ -414,9 +414,34 @@ class BizreachApi:
         self._log_send_result("プラチナ", mrccid, dry_run, out)
         return out
 
+    def send_pickup_scout(self, job_id: str, mrccid: str, subject: str, body: str,
+                          dry_run: bool = True, search_id: str | None = None,
+                          reminder: dict | None = None) -> dict:
+        """本日のピックアップ枠でスカウト送信（POST /api/v2/scouts/pickup）。
+
+        プラチナ残数を消費しない無料枠。単数mrccid・token不要。プラチナと同じボディ形状。
+        """
+        headers = {"x-idempotency-key": str(uuid.uuid4()),
+                   "x-screen-type": "daily_pickup_resume_list"}
+        if search_id:
+            headers["x-search-id"] = search_id
+        payload = {
+            "subject": subject, "body": body, "dryRun": dry_run,
+            "jobId": job_id, "mrccid": mrccid, "isReservation": False,
+            "reminder": self._reminder_obj(reminder),
+        }
+        try:
+            out = self._post_json("/api/v2/scouts/pickup", payload, headers)
+        except Exception as e:  # noqa: BLE001
+            logger.error("ピックアップ送信で例外 mrccid=%s: %s", mrccid, e)
+            return {"status": 0, "error": str(e)}
+        self._log_send_result("ピックアップ", mrccid, dry_run, out)
+        out["endpoint"] = "pickup"
+        return out
+
     @staticmethod
     def _ok(out: dict) -> bool:
-        """送信成功の判定。プラチナは 201 Created、通常は 200 を返す。"""
+        """送信成功の判定。プラチナ/ピックアップは 201 Created、通常は 200 を返す。"""
         return out.get("status") in (200, 201)
 
     def _log_send_result(self, kind: str, mrccid: str, dry_run: bool, out: dict) -> None:

@@ -24,9 +24,9 @@ on:
         type: string
         default: "30"
       mode:
-        description: "実行モード（scout=通常運用 / probe-send=送信偵察 / test-send=送信API検証(dryRun)）"
+        description: "実行モード（scout / probe-send / test-send / probe-pickup=ピックアップ偵察）"
         type: choice
-        options: ["scout", "probe-send", "test-send"]
+        options: ["scout", "probe-send", "test-send", "probe-pickup"]
         default: "scout"
   schedule:
     # 毎日 09:00 JST（00:00 UTC）。定期実行は repo variables の設定値を使う。
@@ -154,6 +154,11 @@ jobs:
             echo "SEARCH_URL が未設定です。search_url を指定して再実行してください。"
             exit 1
           fi
+
+      # 本日のピックアップ候補者リストAPIの偵察（実送信なし）。
+      - name: Probe pickup (実送信なし)
+        if: env.RUN_MODE == 'probe-pickup'
+        run: bizscout probe-pickup
 
       - name: Status report
         if: always()

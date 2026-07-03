@@ -122,6 +122,20 @@ def test_platinum_scout_singular_mrccid_no_token():
     assert body["dryRun"] is True
 
 
+def test_pickup_scout_endpoint_and_payload():
+    api, req = _api()
+    out = api.send_pickup_scout(job_id="7437375", mrccid="ABC",
+                                subject="件名", body="本文", dry_run=True)
+    call = req.calls[-1]
+    assert call["url"] == "https://cr-support.jp/api/v2/scouts/pickup"
+    assert call["headers"]["x-screen-type"] == "daily_pickup_resume_list"
+    body = _body(call)
+    assert body["mrccid"] == "ABC"          # 単数
+    assert "mrccids" not in body
+    assert "oneTimeToken" not in body       # ピックアップもtoken不要
+    assert out["endpoint"] == "pickup"
+
+
 def test_check_candidates_payload():
     api, req = _api()
     out = api.check_candidates("3213517", ["A", "B"])

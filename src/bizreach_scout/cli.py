@@ -330,6 +330,26 @@ def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
         client.close()
 
 
+@cli.command(name="probe-pickup")
+@click.option("--headless/--no-headless", default=True)
+def probe_pickup(headless: bool) -> None:
+    """「本日のピックアップ」候補者リストAPIを偵察する（実送信なし）。
+
+    mypage を開いて /api/ の通信を data/exports に保存する。ピックアップ候補者リストの
+    エンドポイントを特定するために使う。
+    """
+    from .bizreach.client import BizreachClient
+    from .bizreach.pickup_probe import PickupProbe
+
+    client = BizreachClient(headless=headless).start()
+    try:
+        client.ensure_logged_in()
+        PickupProbe(client).run()
+        click.echo("偵察完了。data/exports の pickup_* を確認してください（実送信なし）。")
+    finally:
+        client.close()
+
+
 @cli.command()
 def doctor() -> None:
     """完全自動運用の起動前チェック（環境・設定・依存を点検）。"""
