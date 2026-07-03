@@ -285,6 +285,9 @@ def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
             click.echo("jobId を取得できませんでした。検索URLを確認してください。")
             return
 
+        holders = api.get_platinum_scout_holders()
+        click.echo(f"[プラチナ残数] {holders.get('count')}（{holders}）")
+
         target = mrccid or next(iter(api.iter_candidate_ids(search_url, 1)), None)
         if not target:
             click.echo("候補者を取得できませんでした。")

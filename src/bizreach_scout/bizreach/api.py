@@ -175,6 +175,7 @@ class BizreachApi:
     def __init__(self, client):
         self.client = client
         self.base = client.sel.base_url.rstrip("/")
+        self._platinum_remaining: int | None = None  # プラチナ残数キャッシュ
 
     @property
     def _req(self):
@@ -335,6 +336,31 @@ class BizreachApi:
         logger.info("ワンタイムトークンを取得できませんでした（通常送信は不可の可能性）。")
         return None
 
+    def get_platinum_scout_holders(self) -> dict:
+        """プラチナスカウトの残数を取得する（GET /api/v2/scouts/platinum/holders）。
+
+        戻り値 {"status", "count", "holderType"} 。count が月内の送信可能残数。
+        """
+        try:
+            resp = self._req.get(f"{self.base}/api/v2/scouts/platinum/holders")
+            out = {"status": resp.status}
+            try:
+                out.update(resp.json())
+            except Exception:  # noqa: BLE001
+                out["text"] = resp.text()[:500]
+            return out
+        except Exception as e:  # noqa: BLE001
+            logger.warning("プラチナ残数の取得で例外: %s", e)
+            return {"status": 0, "error": str(e)}
+
+    def platinum_remaining(self, refresh: bool = False) -> int | None:
+        """プラチナ残数（キャッシュ）。取得できない場合は None（不明）。"""
+        if refresh or self._platinum_remaining is None:
+            info = self.get_platinum_scout_holders()
+            cnt = info.get("count")
+            self._platinum_remaining = cnt if isinstance(cnt, int) else None
+        return self._platinum_remaining
+
     def check_candidates(self, job_id: str, mrccids: list[str]) -> dict:
         """送信前チェック。候補者が送信可能か検証する。"""
         try:
@@ -415,9 +441,20 @@ class BizreachApi:
                 err = c.get("error")
                 break
         if err == "ClassMismatch":
+            # プラチナ残数を確認（本送信のみゲート。dryRunは消費しない）。
+            remaining = self.platinum_remaining()
+            if not dry_run and remaining is not None and remaining <= 0:
+                logger.warning("プラチナ残数が0のため送信をスキップ mrccid=%s", mrccid)
+                return {"status": 0, "skipped": "PlatinumQuotaExhausted",
+                        "endpoint": "platinum", "platinum_remaining": 0}
             out = self.send_platinum_scout(job_id, mrccid, subject, body,
                                            dry_run, search_id, reminder)
             out["endpoint"] = "platinum"
+            # 本送信の成功時のみ残数を減算。
+            if not dry_run and out.get("status") == 200 \
+                    and self._platinum_remaining is not None:
+                self._platinum_remaining -= 1
+            out["platinum_remaining"] = self._platinum_remaining
         elif err:
             logger.info("送信不可のためスキップ mrccid=%s error=%s", mrccid, err)
             out = {"status": 0, "skipped": err, "endpoint": "skip"}

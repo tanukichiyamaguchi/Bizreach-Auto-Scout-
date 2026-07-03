@@ -163,3 +163,54 @@ def test_idempotency_key_unique_per_send():
     api.send_platinum_scout("J", "A", "s", "b", dry_run=True)
     assert (req.calls[0]["headers"]["x-idempotency-key"]
             != req.calls[1]["headers"]["x-idempotency-key"])
+
+
+# --- プラチナ残数（quota）ガード ---------------------------------------------
+
+def _get_fake(url_count):
+    """holders GET が指定の count を返す FakeRequest。"""
+    class _Req(_FakeRequest):
+        def get(self, url):
+            if "platinum/holders" in url:
+                return _FakeResponse(200, {"count": url_count, "holderType": "Company"})
+            return _FakeResponse(200, {})
+    return _Req
+
+
+def test_platinum_remaining_cached():
+    api, _ = _api()
+    api.client.page.request = _get_fake(5)()
+    assert api.platinum_remaining() == 5
+    # キャッシュ: 2回目はGETを増やさない（値は同じ）。
+    assert api.platinum_remaining() == 5
+
+
+def test_real_platinum_send_skipped_when_quota_zero():
+    resp = {"checkCandidates": {"candidates": [{"mrccid": "HC", "error": "ClassMismatch"}]}}
+    req = _get_fake(0)(resp)
+    api = BizreachApi(_FakeClient(req))
+    out = api.route_scout("J", "HC", "s", "b", dry_run=False)  # 本送信
+    assert out["skipped"] == "PlatinumQuotaExhausted"
+    # 送信APIは叩かれない。
+    assert all("scouts/platinum" not in c["url"] for c in req.calls)
+
+
+def test_real_platinum_send_decrements_quota():
+    resp = {
+        "checkCandidates": {"candidates": [{"mrccid": "HC", "error": "ClassMismatch"}]},
+        "scouts/platinum": {"result": "ok"},
+    }
+    req = _get_fake(2)(resp)
+    api = BizreachApi(_FakeClient(req))
+    out = api.route_scout("J", "HC", "s", "b", dry_run=False)
+    assert out["endpoint"] == "platinum"
+    assert out["platinum_remaining"] == 1  # 2 -> 1 に減算
+
+
+def test_dryrun_platinum_does_not_consume_quota():
+    resp = {"checkCandidates": {"candidates": [{"mrccid": "HC", "error": "ClassMismatch"}]}}
+    req = _get_fake(3)(resp)
+    api = BizreachApi(_FakeClient(req))
+    out = api.route_scout("J", "HC", "s", "b", dry_run=True)
+    assert out["endpoint"] == "platinum"
+    assert api._platinum_remaining == 3  # 消費されない
