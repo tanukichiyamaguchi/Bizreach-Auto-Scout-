@@ -33,7 +33,9 @@ class BizreachPickupSource(CandidateSource):
         if self.kind == "candidate":
             return ["pick-up-candidate"]
         if self.kind == "both":
-            return ["pick-up-job", "pick-up-candidate"]
+            # pick-up-* 全セクション（本日のピックアップ求人／候補者ほか）を網羅。
+            # 候補者セクションの data-itemid 接尾辞に依存せず確実に拾うための catch-all。
+            return ["pick-up-"]
         return ["pick-up-job"]  # 既定は本命のピックアップ求人
 
     def iter_candidates(self) -> Iterator[Candidate]:
@@ -79,13 +81,33 @@ class BizreachPickupSource(CandidateSource):
         ids: list[str] = []
         for prefix in self._prefixes():
             loc = page.locator(f'li[data-itemid^="{prefix}"] a.freescout')
-            for i in range(loc.count()):
+            n = loc.count()
+            logger.info("ピックアップ抽出: 接頭辞=%r 該当freescout=%d件", prefix, n)
+            for i in range(n):
                 a = loc.nth(i)
                 rid = a.get_attribute("data-resume-id")
                 status = a.get_attribute("data-scount-status") or ""
                 if rid and status != "SCOUTED":
                     ids.append(rid)
+        self._log_sections(page)
         return list(dict.fromkeys(ids))  # 重複除去・順序維持
+
+    def _log_sections(self, page) -> None:
+        """ページ上に存在する pick-up-* セクションの data-itemid を診断ログに出す。
+
+        候補者セクションの実際の接頭辞を特定し、catch-all の網羅性を確認するため。
+        """
+        try:
+            loc = page.locator('li[data-itemid^="pick-up-"]')
+            seen: dict[str, int] = {}
+            for i in range(loc.count()):
+                v = loc.nth(i).get_attribute("data-itemid") or ""
+                key = "-".join(v.split("-")[:3])  # 例: pick-up-job / pick-up-candidate
+                seen[key] = seen.get(key, 0) + 1
+            if seen:
+                logger.info("ピックアップのセクション構成: %s", seen)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _resolve_mrccid(self, page, resume_id: str) -> str | None:
         """freescoutを開き、コピー用URL(#jsi_lap_url_copy)から mrccid を取り出して閉じる。"""
