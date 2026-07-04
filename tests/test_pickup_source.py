@@ -93,7 +93,9 @@ def test_resolve_mrccid_none_when_no_copy_url():
 
 def test_default_kind_is_pickup_job():
     assert BizreachPickupSource()._prefixes() == ["pick-up-job"]
-    assert BizreachPickupSource(kind="both")._prefixes() == ["pick-up-job", "pick-up-candidate"]
+    # both は pick-up-* 全セクションを catch-all で網羅（候補者セクションも確実に拾う）。
+    assert BizreachPickupSource(kind="both")._prefixes() == ["pick-up-"]
+    assert BizreachPickupSource(kind="candidate")._prefixes() == ["pick-up-candidate"]
 
 
 class _ClosePage:

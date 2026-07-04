@@ -121,14 +121,14 @@ jobs:
         continue-on-error: true
         run: bizscout doctor
 
-      # 本日のピックアップ求人（無料枠・本命）。schedule と mode=pickup で実行。
+      # 本日のピックアップ（無料枠・本命）。求人ベース＋候補者ベースの両セクションを処理。
       # 本命なので先に実行し、失敗しても検索スカウトは続行させる（continue-on-error）。
       - name: Run pickup (本日のピックアップ・無料枠・本命)
         if: env.RUN_MODE == 'pickup' || github.event_name == 'schedule'
         continue-on-error: true
         run: |
-          echo "本日のピックアップ求人へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX）。"
-          bizscout run-pickup --kind job --max "$RUN_MAX"
+          echo "本日のピックアップ（求人＋候補者）へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX）。"
+          bizscout run-pickup --kind both --max "$RUN_MAX"
 
       # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
       - name: Run scout (検索スカウト＋再送)
