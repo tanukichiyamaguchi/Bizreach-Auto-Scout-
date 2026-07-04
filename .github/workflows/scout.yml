@@ -29,8 +29,8 @@ on:
         options: ["scout", "pickup", "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
         default: "scout"
   schedule:
-    # 毎日 09:00 JST（00:00 UTC）。定期実行は repo variables の設定値を使う。
-    - cron: "0 0 * * *"
+    # 毎日 20:00 JST（11:00 UTC）。定期実行は repo variables の設定値を使う。
+    - cron: "0 11 * * *"
 
 # 同時実行を禁止して二重送信を防ぐ（キューイング）。
 concurrency:
