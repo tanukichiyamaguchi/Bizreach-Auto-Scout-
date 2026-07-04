@@ -58,7 +58,7 @@ def _capturing_client(captured: dict):
     return SimpleNamespace(messages=SimpleNamespace(create=_create))
 
 
-def test_extended_thinking_enabled_passes_thinking_and_auto_tool_choice():
+def test_extended_thinking_enabled_passes_adaptive_and_auto_tool_choice():
     captured: dict = {}
     gen = ScoutGenerator(client=_capturing_client(captured), model="test-model")
     orig = gen._settings.thinking_budget_tokens
@@ -67,8 +67,36 @@ def test_extended_thinking_enabled_passes_thinking_and_auto_tool_choice():
         gen.generate(make_candidate())
     finally:
         gen._settings.thinking_budget_tokens = orig
-    assert captured["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    # Opus 4.8 では adaptive thinking を使う（budget_tokens形式は400になる）。
+    assert captured["thinking"] == {"type": "adaptive"}
+    assert captured["output_config"]["effort"]  # 深さは effort で制御
     assert captured["tool_choice"] == {"type": "auto"}  # 拡張思考時は強制tool_choice不可
+
+
+def test_thinking_falls_back_to_forced_tool_when_no_tool_output():
+    # adaptive(auto)でツール未出力なら、思考なし＋強制toolで確実に取得する。
+    calls: list = []
+    tool_block = SimpleNamespace(type="tool_use", name="emit_scout", input=VALID_INPUT, id="t1")
+    tool_resp = SimpleNamespace(content=[tool_block])
+    text_resp = SimpleNamespace(content=[SimpleNamespace(type="text", text="…")])
+
+    def _create(**kwargs):
+        tc = kwargs.get("tool_choice")
+        calls.append(tc)
+        forced = tc == {"type": "tool", "name": "emit_scout"}
+        return tool_resp if forced else text_resp
+
+    gen = ScoutGenerator(
+        client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
+    orig = gen._settings.thinking_budget_tokens
+    gen._settings.thinking_budget_tokens = 8000
+    try:
+        scout = gen.generate(make_candidate())
+    finally:
+        gen._settings.thinking_budget_tokens = orig
+    assert scout is not None
+    assert calls[0] == {"type": "auto"}                       # 1回目: 拡張思考(auto)
+    assert calls[1] == {"type": "tool", "name": "emit_scout"}  # 2回目: 強制toolフォールバック
 
 
 def test_thinking_disabled_uses_forced_tool_choice():
