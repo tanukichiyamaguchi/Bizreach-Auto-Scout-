@@ -1,7 +1,10 @@
 from bizreach_scout.eligibility import check_eligibility
-from bizreach_scout.models import Education, Gender
+from bizreach_scout.models import Education, Employment, Gender
 
 from .factories import make_candidate
+
+# 直近の転職テスト用: 過去に3年以上の在籍歴を持たせて「勤続3年以上」条件を満たす。
+_LONG_PAST = [Employment(company="過去在籍", years=5.0)]
 
 
 def test_eligible_candidate_passes():
@@ -101,6 +104,93 @@ def test_status_flags_helper():
     c = make_candidate(intention=["Hot", "Will"], resume_updated_status="New",
                        contract_plan="Premium")
     assert c.status_flags() == {"hot", "will", "new", "premium"}
+
+
+# --- 直近1年以内の転職（現職在籍が短い）は対象外 -------------------------------
+
+def test_recent_job_change_fails():
+    # 過去に3年以上の在籍歴はあるが、現職在籍が1年未満 = 直近に転職 → 対象外。
+    result = check_eligibility(make_candidate(current_tenure_years=0.5,
+                                              employments=_LONG_PAST))
+    assert not result.eligible
+    assert any("直近1年以内の転職" in r for r in result.failed)
+
+
+def test_current_tenure_one_year_passes():
+    # ちょうど1年は「未満」ではないので recency では弾かない（他条件は満たす前提）。
+    result = check_eligibility(make_candidate(current_tenure_years=1.0,
+                                              employments=_LONG_PAST))
+    assert result.eligible
+
+
+def test_recent_job_change_not_flagged_when_tenure_unknown():
+    # 現職在籍も過去在籍も無く不明なら「勤続年数が不明」で拾う（recency文言は付けない）。
+    result = check_eligibility(make_candidate(current_tenure_years=None))
+    assert not any("直近1年以内の転職" in r for r in result.failed)
+    assert any("勤続年数が不明" in r for r in result.failed)
+
+
+def test_unknown_current_tenure_with_past_record_needs_confirmation():
+    # 過去に長期在籍があり勤続条件は満たすが、現職在籍が不明で recency 判定不能 →
+    # 自動送信せず要確認に回す（要件1の抜け穴を塞ぐ）。
+    result = check_eligibility(make_candidate(current_tenure_years=None,
+                                              employments=_LONG_PAST))
+    assert not result.eligible
+    assert any("現職の在籍年数が不明" in r for r in result.failed)
+
+
+# --- 転職回数が多い（年代別上限「以上」）は対象外 -----------------------------
+
+def test_job_change_count_helper():
+    # prior 3社 + 現職 = 4社 → 転職回数 3。
+    c = make_candidate(prior_companies=["A", "B", "C"])
+    assert c.job_change_count() == 3
+
+
+def test_20s_three_changes_fails():
+    # 20代（29歳）で転職回数3回（=4社）→ 対象外。
+    result = check_eligibility(make_candidate(age=29, current_tenure_years=4.0,
+                                              prior_companies=["A", "B", "C"]))
+    assert not result.eligible
+    assert any("転職回数が多い" in r for r in result.failed)
+
+
+def test_20s_two_changes_passes():
+    # 20代で転職回数2回（=3社）→ 対象。
+    result = check_eligibility(make_candidate(age=29, current_tenure_years=4.0,
+                                              prior_companies=["A", "B"]))
+    assert result.eligible
+
+
+def test_30s_five_changes_fails_four_passes():
+    # 30代（35歳）: 5回以上で対象外。4回はOK。
+    fail = check_eligibility(make_candidate(age=35, current_tenure_years=4.0,
+                                            prior_companies=["A", "B", "C", "D", "E"]))
+    assert not fail.eligible
+    assert any("転職回数が多い" in r for r in fail.failed)
+    ok = check_eligibility(make_candidate(age=35, current_tenure_years=4.0,
+                                          prior_companies=["A", "B", "C", "D"]))
+    assert ok.eligible
+
+
+def test_40s_six_changes_fails_five_passes():
+    # 40代以上（45歳）: 6回以上で対象外。5回はOK。
+    fail = check_eligibility(make_candidate(
+        age=45, current_tenure_years=4.0,
+        prior_companies=["A", "B", "C", "D", "E", "F"]))
+    assert not fail.eligible
+    assert any("転職回数が多い" in r for r in fail.failed)
+    ok = check_eligibility(make_candidate(
+        age=45, current_tenure_years=4.0,
+        prior_companies=["A", "B", "C", "D", "E"]))
+    assert ok.eligible
+
+
+def test_job_change_rule_skipped_when_age_unknown():
+    # 年齢不明なら年代別の転職回数ルールは適用しない（年齢不明は別条件で拾う）。
+    result = check_eligibility(make_candidate(age=None,
+                                              prior_companies=["A", "B", "C", "D", "E", "F"]))
+    assert not any("転職回数が多い" in r for r in result.failed)
 
 
 def test_pickup_ignores_status_filter():
