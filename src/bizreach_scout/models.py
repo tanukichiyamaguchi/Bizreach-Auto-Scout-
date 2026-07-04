@@ -124,6 +124,21 @@ class Candidate(BaseModel):
         ]
         return max(values) if values else None
 
+    def job_change_count(self) -> int:
+        """転職回数の推定 = 勤務先数 - 1（0未満は0）。
+
+        current_company / prior_companies / employments を横断して社名を重複排除し
+        勤務先数を数える。取り込み経路（API/CSV/テキスト）の差で現職が
+        prior_companies に含まれても二重計上しない。
+        ※現職が複数（同時在籍）の場合は多めに出る可能性がある（保守的＝除外側に倒れる）。
+        """
+        names: set[str] = set()
+        if self.current_company:
+            names.add(self.current_company)
+        names.update(n for n in self.prior_companies if n)
+        names.update(e.company for e in self.employments if e.company)
+        return max(0, len(names) - 1)
+
 
 class ConsultantProfile(BaseModel):
     """在籍コンサルタント（共通点マッチングの対象）。"""

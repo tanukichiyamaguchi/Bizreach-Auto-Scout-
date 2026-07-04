@@ -10,6 +10,14 @@ eligibility:
   min_same_company_years: 3   # 3年以上の同じ会社での勤務歴
   required_gender: male       # 男性
   required_education: bachelor # 大学・大学院卒業以上（bachelor 以上）
+  # 直近1年以内の転職（現職の在籍が1年未満）は対象外。0/未設定で無効。
+  min_current_tenure_years: 1
+  # 転職回数が多い人は対象外（この回数「以上」で除外。転職回数 = 勤務先数 - 1）。
+  #   20代: 3回以上 / 30代: 5回以上 / 40代以上: 6回以上
+  job_changes_exclude:
+    - { age_max: 29, count: 3 }              # ～29歳（20代）
+    - { age_min: 30, age_max: 39, count: 5 } # 30代
+    - { age_min: 40, count: 6 }              # 40代以上
   # 会員ステータス条件: 以下のいずれかに該当する候補者のみ対象（OR条件）。
   #   new(新着) / updated(更新) / hot(HOT) / will(WILL) / premium(プレミアム会員)
   # 会員種別(Talent/HighClass)は両方対象（送信APIは自動振り分け）。

@@ -61,6 +61,34 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
     elif tenure < min_years:
         failed.append(f"同一企業での勤続が{min_years}年未満（{tenure}年）")
 
+    # --- 直近◯年以内の転職（現職の在籍が短い）は対象外 -------------------------
+    # 現職在籍が min_current_tenure_years 未満 = 直近に転職した人として除外。
+    min_cur = cfg.get("min_current_tenure_years")
+    if min_cur:
+        cur = candidate.current_tenure_years
+        if cur is None:
+            # 現職在籍が不明 = 直近に転職したか判定不能。過去在籍から max_single_tenure が
+            # 取れて「勤続年数が不明」で拾えない場合のみ、判定不能→要確認として回す
+            # （API経路では現職の期間欠損でもここに落ちる）。
+            if tenure is not None:
+                failed.append("現職の在籍年数が不明（要確認）")
+        elif cur < min_cur:
+            failed.append(f"直近{min_cur}年以内の転職（現職{cur}年）")
+
+    # --- 転職回数が多い（年代別の上限「以上」）は対象外 -------------------------
+    # 例: 20代=3回以上 / 30代=5回以上 / 40代以上=6回以上。転職回数 = 勤務先数 - 1。
+    brackets = cfg.get("job_changes_exclude", []) or []
+    if brackets and candidate.age is not None:
+        changes = candidate.job_change_count()
+        for b in brackets:
+            lo = b.get("age_min", 0)
+            hi = b.get("age_max", 200)
+            if lo <= candidate.age <= hi:
+                limit = b.get("count")
+                if limit is not None and changes >= limit:
+                    failed.append(f"転職回数が多い（{changes}回・{limit}回以上は対象外）")
+                break
+
     # --- 会員ステータス（新着/更新/HOT/WILL/プレミアムのいずれか）-------------
     # ピックアップ求人では適用しない（apply_status_filter=False）。
     require_status = cfg.get("require_any_status", []) or []
