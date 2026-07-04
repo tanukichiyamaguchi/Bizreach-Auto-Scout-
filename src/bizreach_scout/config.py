@@ -37,10 +37,13 @@ class Settings(BaseSettings):
     # Anthropic（API キーは ANTHROPIC_API_KEY を直接参照）
     model: str = "claude-opus-4-8"
     max_tokens: int = 16000
-    # 拡張思考(extended thinking)。>0 で有効化し、その token 数だけ内部推論に使う。
-    # 必ず max_tokens より小さくすること（max_tokens は思考+出力の合計上限）。
-    # 0 にすると拡張思考オフ（従来の標準モード）。
+    # 拡張思考(extended thinking)の有効化フラグ。>0 で有効、0 でオフ。
+    # 注: Opus 4.8/4.7 では {"type":"enabled","budget_tokens":N} は廃止され400になるため、
+    #     adaptive thinking を使う。深さは thinking_effort(下記)で制御する。
+    #     この値は「思考トークン数」ではなく単なる ON/OFF フラグとして扱う。
     thinking_budget_tokens: int = 8000
+    # 思考の深さ/全体のトークン量: low | medium | high | xhigh | max（adaptive時に使用）。
+    thinking_effort: str = "medium"
 
     # 送信制御
     dry_run: bool = True

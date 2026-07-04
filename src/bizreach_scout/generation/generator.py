@@ -54,7 +54,7 @@ class ScoutGenerator:
         return self._client
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
-    def _call(self, system: str, messages: list[dict]):
+    def _call(self, system: str, messages: list[dict], force_tool: bool = False):
         kwargs: dict = {
             "model": self._model,
             "max_tokens": self._settings.max_tokens,
@@ -63,12 +63,17 @@ class ScoutGenerator:
             "tools": [EMIT_SCOUT_TOOL],
         }
         budget = self._settings.thinking_budget_tokens
-        if budget and budget > 0:
-            # 拡張思考(extended thinking)を有効化。
-            # 注: 拡張思考時は強制 tool_choice(type=tool/any) が使えないため auto にする。
-            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        if budget and budget > 0 and not force_tool:
+            # 拡張思考(adaptive thinking)を有効化。
+            # 注: Opus 4.8/4.7 では {"type":"enabled","budget_tokens":N} は廃止され400に
+            #     なるため adaptive を使い、深さは output_config.effort で制御する。
+            #     また拡張思考時は強制 tool_choice(tool/any) が使えないため auto にする。
+            kwargs["thinking"] = {"type": "adaptive"}
+            if self._settings.thinking_effort:
+                kwargs["output_config"] = {"effort": self._settings.thinking_effort}
             kwargs["tool_choice"] = {"type": "auto"}
         else:
+            # 思考オフ（またはフォールバック時）は強制tool_choiceで確実に構造化出力を得る。
             kwargs["tool_choice"] = {"type": "tool", "name": "emit_scout"}
         return self.client.messages.create(**kwargs)
 
@@ -93,7 +98,14 @@ class ScoutGenerator:
         messages: list[dict] = [{"role": "user", "content": _USER_INSTRUCTION}]
 
         resp = self._call(system, messages)
-        data, tool_block = self._extract_tool_input(resp)
+        try:
+            data, tool_block = self._extract_tool_input(resp)
+        except RuntimeError:
+            # adaptive thinking + auto では稀にツール未呼び出しになる。
+            # 思考なし＋強制tool_choiceで確実に構造化出力を取り直す。
+            logger.warning("拡張思考でツール未出力。強制tool_choiceで再試行します。")
+            resp = self._call(system, messages, force_tool=True)
+            data, tool_block = self._extract_tool_input(resp)
 
         scout = self._assemble(candidate, data, matches, tone_key, company, rules)
 
