@@ -1,6 +1,6 @@
 """候補者の対象条件（必須要件）判定。
 
-条件: 27歳〜42歳 / 3年以上の同じ会社での勤務歴 / 男性 / 大学・大学院卒業以上。
+条件: 27歳〜42歳 / 2.5年以上の同じ会社での勤務歴 / 男性 / 大学・大学院卒業以上。
 いずれかを満たさない（または判定不能）の場合は eligible=False とし、
 完全自動送信からは除外して「要確認」リストへ回す。
 """
@@ -58,7 +58,7 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
         failed.append(f"学歴が{min_edu.value}未満（{candidate.education.value}）")
 
     # --- 同一企業での勤続年数 -------------------------------------------------
-    min_years = cfg.get("min_same_company_years", 3)
+    min_years = cfg.get("min_same_company_years", 2.5)
     tenure = candidate.max_single_tenure_years()
     if tenure is None:
         failed.append("勤続年数が不明（要確認）")

@@ -8,7 +8,7 @@
 eligibility:
   min_age: 27                 # 27歳以上
   max_age: 42                 # 42歳まで対象（43歳以上は対象外）
-  min_same_company_years: 3   # 3年以上の同じ会社での勤務歴
+  min_same_company_years: 2.5 # 2.5年以上の同じ会社での勤務歴
   required_gender: male       # 男性
   required_education: bachelor # 大学・大学院卒業以上（bachelor 以上）
   # 直近1年以内の転職（現職の在籍が1年未満）は対象外。0/未設定で無効。

@@ -56,6 +56,23 @@ def test_short_tenure_fails():
     assert any("勤続" in r for r in result.failed)
 
 
+def test_tenure_2_5_years_passes():
+    # 下限の2.5年は対象内（同一企業2.5年以上）。
+    result = check_eligibility(
+        make_candidate(current_tenure_years=2.5, employments=[])
+    )
+    assert result.eligible
+
+
+def test_tenure_2_4_years_fails():
+    # 2.5年未満（2.4年）は対象外。
+    result = check_eligibility(
+        make_candidate(current_tenure_years=2.4, employments=[])
+    )
+    assert not result.eligible
+    assert any("勤続" in r for r in result.failed)
+
+
 def test_low_education_fails():
     result = check_eligibility(make_candidate(education=Education.high_school))
     assert not result.eligible

@@ -175,7 +175,7 @@ cp config/bizreach_selectors.example.yaml config/bizreach_selectors.yaml
 - **kill switch**: `BIZSCOUT_KILL_SWITCH` のファイルを作成すると即時に送信停止。
 - **送信上限**: `BIZSCOUT_MAX_SENDS_PER_RUN`。
 - **重複防止**: 同一会員番号への初回は二度生成・送信しない（SQLite管理）。
-- **対象条件**: 27歳〜42歳／同一企業3年以上／男性／大学卒以上を満たさない（または不明の）候補者は自動送信から除外し「要確認」として記録（`bizscout report`）。
+- **対象条件**: 27歳〜42歳／同一企業2.5年以上／男性／大学卒以上を満たさない（または不明の）候補者は自動送信から除外し「要確認」として記録（`bizscout report`）。
 - **人間的な間隔**: 送信間隔・操作間にランダム待機。
 
 ---
