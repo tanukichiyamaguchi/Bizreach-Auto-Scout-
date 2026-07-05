@@ -104,3 +104,7 @@ matching:
                        第一生命, 日本生命, 明治安田, 外資系保険]
   # 共通点を判定する候補者属性のフィールド
   match_fields: [prior_companies, current_company, industry, job_function, university]
+  # 本文で紹介する共通点コンサルタントの人数上限（優先度順=リクルート/保険→共通点数の
+  # 多い順で上位N名）。候補者によっては10名以上マッチすることがあり、全員を自然文で
+  # 紹介するのは非現実的（省略・視認性低下の一因だった）なので上限を設ける。
+  max_intro_consultants: 3

@@ -31,7 +31,46 @@ EMIT_SCOUT_TOOL = {
             "greeting_offer": {"type": "string", "description": "④挨拶＋限定オファー文"},
             "scout_reason": {
                 "type": "string",
-                "description": "⑤スカウト理由。経歴に具体的に言及し、共通点コンサルタントやリクルート/保険訴求を自然に織り込む。",
+                "description": (
+                    "⑤スカウト理由。候補者の経歴に具体的に言及する（共通点コンサルタントの"
+                    "紹介はここに書かず、consultant_intro_lead/consultant_intros に分けて出力すること）。"
+                ),
+            },
+            "consultant_intro_lead": {
+                "type": "string",
+                "description": (
+                    "【最重要】共通点コンサルタント紹介セクションの導入文（1文）。"
+                    "例：「余談ですが、当社にはあなたと同じ〇〇分野での出身者や△△大学出身の"
+                    "コンサルタントも在籍しておりますので紹介いたします。」のように、候補者との"
+                    "共通点に触れて自然に紹介へつなげる。下記「共通点のあるコンサルタント」一覧が"
+                    "空でない限り、この項目を空文字にしてはならない。一覧が空の場合のみ空文字。"
+                ),
+            },
+            "consultant_intros": {
+                "type": "array",
+                "description": (
+                    "【最重要・省略禁止】下記「共通点のあるコンサルタント」一覧に挙がっている"
+                    "consultant_id を、1人につき1エントリで全員分もれなく出力すること。"
+                    "一覧が空の場合のみ空配列でよい。各エントリの blurb は1〜2文でそのコンサルタント"
+                    "個人の経歴・実績・候補者との共通点を紹介する文章のみを書く"
+                    "（▼名前 プロフィール という見出しやURLは書かないこと。システムが自動的に"
+                    "1人ずつ独立したブロックとして付与するため、他のコンサルタントの紹介文と"
+                    "地続きにしたり要約でまとめたりしないこと）。"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "consultant_id": {
+                            "type": "string",
+                            "description": "共通点のあるコンサルタント一覧のconsultant_idと一致させる",
+                        },
+                        "blurb": {
+                            "type": "string",
+                            "description": "このコンサルタント個人を紹介する1〜2文（▼見出し・URLは書かない）",
+                        },
+                    },
+                    "required": ["consultant_id", "blurb"],
+                },
             },
             "company_intro": {"type": "string", "description": "⑥会社紹介（候補者に刺さる点）"},
             "career_title": {"type": "string", "description": "⑦入社後キャリアのタイトル"},
@@ -49,15 +88,41 @@ EMIT_SCOUT_TOOL = {
                 "type": "string",
                 "description": (
                     "再送本文。初回の約1/2の分量で、熱意を前面に出す。冒頭で再送に自然に触れ、"
-                    "初回と異なる切り口で訴求。共通点コンサルタントには数を絞って言及。"
+                    "初回と異なる切り口で訴求。共通点コンサルタントの紹介はここに書かず、"
+                    "resend_consultant_intro_lead/resend_consultant_intros に分けて出力すること。"
                     "署名・フッターは含めない（システムが付与）。"
                 ),
+            },
+            "resend_consultant_intro_lead": {
+                "type": "string",
+                "description": (
+                    "再送でのコンサルタント紹介の導入文（1文、初回より簡潔に）。"
+                    "下記「再送で紹介するコンサルタント」一覧が空の場合のみ空文字。"
+                ),
+            },
+            "resend_consultant_intros": {
+                "type": "array",
+                "description": (
+                    "再送で紹介するコンサルタント一覧に挙がっている consultant_id を"
+                    "全員分出力すること（通常1名。一覧が空の場合のみ空配列）。"
+                    "形式は consultant_intros と同じ。"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "consultant_id": {"type": "string"},
+                        "blurb": {"type": "string"},
+                    },
+                    "required": ["consultant_id", "blurb"],
+                },
             },
         },
         "required": [
             "subject_first",
             "greeting_offer",
             "scout_reason",
+            "consultant_intro_lead",
+            "consultant_intros",
             "company_intro",
             "career_title",
             "career_body",
@@ -65,6 +130,8 @@ EMIT_SCOUT_TOOL = {
             "position_body",
             "subject_resend",
             "resend_body",
+            "resend_consultant_intro_lead",
+            "resend_consultant_intros",
         ],
     },
 }
@@ -122,14 +189,15 @@ def render_special_instructions(
         count = appeals.get("recruit_consultant_count", 7)
         out.append(
             f"この候補者はリクルート出身です。当社にリクルート出身のコンサルタントが{count}名"
-            "在籍している旨を本文で必ず伝え、上記の共通点コンサルタント（リクルート出身）全員の"
-            "紹介と紹介URLを本文に分かりやすく添付してください。"
+            "在籍している旨をscout_reasonで必ず伝えてください。また、共通点のあるコンサルタント"
+            "一覧のうちリクルート出身者は、consultant_intros に必ず全員含めてください（省略禁止）。"
         )
     if flags["is_insurance"]:
         url = appeals.get("insurance_reference_url", "https://www.consuldent.jp/recruitment/2020/04/3272/")
         out.append(
             "この候補者は保険業界出身です。当社にプルデンシャル生命出身の人材も在籍していることを"
-            f"アピールし、URL {url} を本文に紹介してください。"
+            f"アピールし、URL {url} をscout_reasonで紹介してください。また、共通点のあるコンサルタント"
+            "一覧のうち保険出身者は、consultant_intros に必ず含めてください（省略禁止）。"
         )
     if not out:
         out.append("特別な出身カテゴリ（リクルート/保険）は検出されていません。")
@@ -203,7 +271,8 @@ def _render_resend_rules(rules: dict) -> str:
         "# 再送本文の制約\n"
         f"- 再送件名(subject_resend)は必ず「{prefix}」で始めること。\n"
         f"- 再送本文(resend_body)は初回本文(④〜⑧の合計)の約{pct}%の分量に収め、熱意を前面に出すこと。\n"
-        f"- 共通点コンサルタントへの言及は再送では最大{max_mentions}名までに絞ること。\n"
+        f"- resend_consultant_intros は「共通点のあるコンサルタント」一覧の先頭から"
+        f"最大{max_mentions}名分の consultant_id のみを含めること（それ以外は含めない）。\n"
         "- 冒頭で再送であることに自然に触れ、初回とは異なる切り口・訴求にすること。\n"
         "- 再送にフッター(⑫)は付かない（システムが署名までで止める）。"
     )

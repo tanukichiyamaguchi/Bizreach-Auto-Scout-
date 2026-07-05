@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from bizreach_scout.generation.generator import ScoutGenerator, render_for_human
+from bizreach_scout.models import ConsultantMatch, ConsultantProfile
 
 from .factories import make_candidate
 
@@ -14,6 +15,8 @@ VALID_INPUT = {
     "subject_first": "【Premium Offer】法人営業での突出した実績に惹かれ限定オファーをさせていただきます",
     "greeting_offer": "数多くのご経歴を拝見する中で、貴殿のご実績に強く惹かれご連絡しました。",
     "scout_reason": "新規開拓で全社表彰を重ねられた点、そしてチームを率いてこられた点に魅力を感じています。",
+    "consultant_intro_lead": "",
+    "consultant_intros": [],
     "company_intro": "当社は480医院を支援する、医院・病院経営に特化したコンサルティングファームです。",
     "career_title": "入社後のキャリア",
     "career_body": "2年目で年収990万円、7年目で2,000万円というモデルもございます。",
@@ -21,7 +24,19 @@ VALID_INPUT = {
     "position_body": "経営全般に深く関与し、クライアントの成果に長期で伴走できます。",
     "subject_resend": "【どうしても諦めきれず２度目のご連絡です。】貴殿の組織づくりの経験をどうしても当社で活かしたく",
     "resend_body": "先日ご連絡いたしました件、どうしても諦めきれず改めてご連絡しました。貴殿の組織づくりの経験は当社で必ず活きると確信しております。",
+    "resend_consultant_intro_lead": "",
+    "resend_consultant_intros": [],
 }
+
+# consultants_intro機能のテスト用フィクスチャ（実データconsultants.jsonに依存しない）。
+_INOUE = ConsultantProfile(
+    id="inoue", display_name="井ノ上 貴之",
+    profile_url="https://www.consuldent.jp/member/inoue",
+)
+_SOMETANI = ConsultantProfile(
+    id="sometani", display_name="染谷 東希",
+    profile_url="https://www.consuldent.jp/member/sometani",
+)
 
 
 def _fake_client(input_payload: dict):
@@ -33,7 +48,7 @@ def _fake_client(input_payload: dict):
 
 def test_generate_produces_two_messages():
     gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
-    scout = gen.generate(make_candidate())
+    scout = gen.generate(make_candidate(), matches=[])
 
     assert scout.first.subject.startswith("【Premium Offer】")
     assert scout.resend.subject.startswith("【どうしても諦めきれず２度目のご連絡です。】")
@@ -64,7 +79,7 @@ def test_extended_thinking_enabled_passes_adaptive_and_auto_tool_choice():
     orig = gen._settings.thinking_budget_tokens
     gen._settings.thinking_budget_tokens = 8000
     try:
-        gen.generate(make_candidate())
+        gen.generate(make_candidate(), matches=[])
     finally:
         gen._settings.thinking_budget_tokens = orig
     # Opus 4.8 では adaptive thinking を使う（budget_tokens形式は400になる）。
@@ -91,7 +106,7 @@ def test_thinking_falls_back_to_forced_tool_when_no_tool_output():
     orig = gen._settings.thinking_budget_tokens
     gen._settings.thinking_budget_tokens = 8000
     try:
-        scout = gen.generate(make_candidate())
+        scout = gen.generate(make_candidate(), matches=[])
     finally:
         gen._settings.thinking_budget_tokens = orig
     assert scout is not None
@@ -105,7 +120,7 @@ def test_thinking_disabled_uses_forced_tool_choice():
     orig = gen._settings.thinking_budget_tokens
     gen._settings.thinking_budget_tokens = 0
     try:
-        gen.generate(make_candidate())
+        gen.generate(make_candidate(), matches=[])
     finally:
         gen._settings.thinking_budget_tokens = orig
     assert "thinking" not in captured
@@ -115,7 +130,7 @@ def test_thinking_disabled_uses_forced_tool_choice():
 def test_subject_normalized_when_prefix_missing():
     payload = dict(VALID_INPUT, subject_first="ご経歴に惹かれて限定オファー")
     gen = ScoutGenerator(client=_fake_client(payload), model="test-model")
-    scout = gen.generate(make_candidate())
+    scout = gen.generate(make_candidate(), matches=[])
     assert scout.first.subject.startswith("【Premium Offer】")
 
 
@@ -132,8 +147,135 @@ def test_normalize_subject_strips_wrong_bracket_block():
 
 def test_render_for_human_has_code_blocks():
     gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
-    scout = gen.generate(make_candidate())
+    scout = gen.generate(make_candidate(), matches=[])
     rendered = render_for_human(scout)
     assert "【初回送信用】" in rendered
     assert "【再送用】" in rendered
     assert rendered.count("```") >= 8  # 件名×2 + 本文×2 = 4ブロック → 8フェンス
+
+
+# --- 共通点コンサルタント紹介（省略厳禁・1人ずつ独立ブロック）---------------------
+
+def test_consultant_intro_rendered_as_separate_blocks():
+    matches = [
+        ConsultantMatch(consultant=_INOUE, common_points=["IT分野の共通点"]),
+        ConsultantMatch(consultant=_SOMETANI, common_points=["慶應義塾大学の共通点"]),
+    ]
+    payload = dict(
+        VALID_INPUT,
+        consultant_intro_lead=(
+            "余談ですが、当社にはあなたと同じIT分野での出身者や"
+            "慶応義塾大学出身のコンサルタントも在籍しておりますので紹介いたします。"
+        ),
+        consultant_intros=[
+            {"consultant_id": "inoue",
+             "blurb": "当社の井ノ上貴之はIT・テクノロジー出身の当社コンサルタントとして在籍しています。"},
+            {"consultant_id": "sometani",
+             "blurb": "また、染谷東希は慶應義塾大学卒業後、当社で地域一番医院の創出に取り組んでおります。"},
+        ],
+    )
+    gen = ScoutGenerator(client=_fake_client(payload), model="test-model")
+    scout = gen.generate(make_candidate(), matches=matches)
+
+    body = scout.first.body
+    assert "余談ですが" in body
+    # 1人ずつ独立したブロック（▼氏名 プロフィール＋URL）になっている
+    assert "▼井ノ上 貴之 プロフィール\nhttps://www.consuldent.jp/member/inoue" in body
+    assert "▼染谷 東希 プロフィール\nhttps://www.consuldent.jp/member/sometani" in body
+    # 1人目のブロックと2人目の紹介文が空行で区切られている（連結されていない）
+    idx_inoue_url = body.index("https://www.consuldent.jp/member/inoue")
+    idx_sometani_blurb = body.index("また、染谷東希")
+    assert "\n\n" in body[idx_inoue_url:idx_sometani_blurb]
+
+
+def test_no_consultant_matches_yields_no_intro_block():
+    gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
+    scout = gen.generate(make_candidate(), matches=[])
+    assert "▼" not in scout.first.body
+    assert "▼" not in scout.resend.body
+
+
+def test_missing_consultant_intro_triggers_retry_and_fixes_it():
+    # 最重要指示（省略厳禁）が守られなかった場合、1回だけ修正を促して再取得する。
+    matches = [ConsultantMatch(consultant=_INOUE, common_points=["共通点"])]
+    incomplete = dict(VALID_INPUT, consultant_intro_lead="", consultant_intros=[])
+    complete = dict(
+        VALID_INPUT,
+        consultant_intro_lead="ご紹介します。",
+        consultant_intros=[{"consultant_id": "inoue", "blurb": "井ノ上貴之を紹介します。"}],
+    )
+    calls: list[dict] = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        payload = incomplete if len(calls) == 1 else complete
+        block = SimpleNamespace(
+            type="tool_use", name="emit_scout", input=payload, id=f"t{len(calls)}"
+        )
+        return SimpleNamespace(content=[block])
+
+    gen = ScoutGenerator(
+        client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
+    scout = gen.generate(make_candidate(), matches=matches)
+
+    assert len(calls) == 2  # 1回目で不足を検知→2回目で修正
+    assert "▼井ノ上 貴之 プロフィール" in scout.first.body
+
+
+def test_validation_retry_survives_missing_tool_output_itself():
+    # 検証リトライ(2回目)自体がadaptive+autoでツール未出力になっても、
+    # 強制tool_choiceフォールバックで復旧しクラッシュしないことを確認する
+    # （_call_ensuring_tool を検証リトライ経路にも適用した回帰テスト）。
+    matches = [ConsultantMatch(consultant=_INOUE, common_points=["共通点"])]
+    incomplete = dict(VALID_INPUT, consultant_intro_lead="", consultant_intros=[])
+    complete = dict(
+        VALID_INPUT,
+        consultant_intro_lead="ご紹介します。",
+        consultant_intros=[{"consultant_id": "inoue", "blurb": "井ノ上貴之を紹介します。"}],
+    )
+    calls: list[dict] = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        n = len(calls)
+        if n == 1:
+            block = SimpleNamespace(type="tool_use", name="emit_scout", input=incomplete, id="t1")
+            return SimpleNamespace(content=[block])
+        if n == 2:
+            # 検証リトライの1回目(auto)がツール未使用で返ってくるケースを再現。
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text="…")])
+        block = SimpleNamespace(type="tool_use", name="emit_scout", input=complete, id=f"t{n}")
+        return SimpleNamespace(content=[block])
+
+    gen = ScoutGenerator(
+        client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
+    scout = gen.generate(make_candidate(), matches=matches)  # 例外を送出せず完了すること
+
+    assert len(calls) == 3  # 1回目→検証リトライ(auto失敗)→強制toolで復旧
+    assert "▼井ノ上 貴之 プロフィール" in scout.first.body
+
+
+def test_resend_consultant_intro_capped_to_max_mentions():
+    # resend.max_consultant_mentions（既定1）を超えるコンサルタントは再送に含めない。
+    matches = [
+        ConsultantMatch(consultant=_INOUE, common_points=["共通点1"]),
+        ConsultantMatch(consultant=_SOMETANI, common_points=["共通点2"]),
+    ]
+    payload = dict(
+        VALID_INPUT,
+        consultant_intro_lead="紹介します。",
+        consultant_intros=[
+            {"consultant_id": "inoue", "blurb": "井ノ上さん紹介文。"},
+            {"consultant_id": "sometani", "blurb": "染谷さん紹介文。"},
+        ],
+        resend_consultant_intro_lead="再送でも紹介します。",
+        resend_consultant_intros=[
+            {"consultant_id": "inoue", "blurb": "井ノ上さんの再送用紹介文。"},
+            {"consultant_id": "sometani", "blurb": "染谷さんの再送用紹介文。"},
+        ],
+    )
+    gen = ScoutGenerator(client=_fake_client(payload), model="test-model")
+    scout = gen.generate(make_candidate(), matches=matches)
+
+    assert "井ノ上さんの再送用紹介文" in scout.resend.body
+    assert "染谷さんの再送用紹介文" not in scout.resend.body  # 上限(既定1名)により除外

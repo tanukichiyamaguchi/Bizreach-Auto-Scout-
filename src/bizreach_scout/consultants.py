@@ -103,13 +103,65 @@ def match_consultants(
 
 
 def render_matches_block(matches: list[ConsultantMatch]) -> str:
-    """プロンプトに差し込むコンサルタント共通点ブロックを生成。"""
+    """プロンプトに差し込むコンサルタント共通点ブロックを生成。
+
+    consultant_id は emit_scout の consultant_intros[].consultant_id で
+    紐付けるための内部識別子（本文には出さない）。
+    """
     if not matches:
         return "（共通点のある在籍コンサルタントは特定されていません。無理に言及しないこと。）"
     lines = []
     for m in matches:
         c = m.consultant
         lines.append(
-            f"- {c.display_name}｜共通点: {'、'.join(m.common_points)}｜紹介URL: {c.profile_url}"
+            f"- consultant_id: {c.id}｜氏名: {c.display_name}｜"
+            f"共通点: {'、'.join(m.common_points)}｜紹介URL: {c.profile_url}"
         )
     return "\n".join(lines)
+
+
+def select_intro_matches(
+    matches: list[ConsultantMatch], rules: dict | None = None
+) -> list[ConsultantMatch]:
+    """本文で紹介するコンサルタントを、match_consultants の優先順位のまま上位N名に絞る。
+
+    候補者によっては共通点のあるコンサルタントが10名以上になることがあり、全員を
+    自然な文章で紹介するのは非現実的（＝紹介の省略や視認性低下の一因だった）。
+    matching.max_intro_consultants（既定3）で上限を設け、現実的なタスクにする。
+    """
+    cfg = (rules or scout_rules()).get("matching", {})
+    max_n = cfg.get("max_intro_consultants", 3)
+    if not max_n or max_n <= 0:
+        return list(matches)
+    return list(matches[:max_n])
+
+
+def render_consultant_intro_section(
+    lead: str, blurbs: dict[str, str], matches: list[ConsultantMatch]
+) -> str:
+    """モデルが生成した導入文＋コンサルタントごとの紹介文を固定書式で組み立てる。
+
+    1人ずつ独立したブロックにする（文章を連結しない＝視認性を優先）:
+        {blurb}
+        ▼{display_name} プロフィール
+        {profile_url}
+    先頭のブロックのみ、導入文(lead)に自然につながる形で同じ段落として続ける。
+    2人目以降は空行で区切った独立ブロックにする。blurb が空/未提供のコンサルタントは
+    紹介ブロックごとスキップする。
+    """
+    blocks: list[tuple[str, str, str]] = []
+    for m in matches:
+        blurb = (blurbs.get(m.consultant.id) or "").strip()
+        if not blurb:
+            continue
+        blocks.append((m.consultant.display_name, blurb, m.consultant.profile_url))
+    if not blocks:
+        return ""
+
+    lead = (lead or "").strip()
+    name0, blurb0, url0 = blocks[0]
+    first_lines = [p for p in (lead, blurb0) if p] + [f"▼{name0} プロフィール", url0]
+    rendered = ["\n".join(first_lines)]
+    for name, blurb, url in blocks[1:]:
+        rendered.append(f"{blurb}\n▼{name} プロフィール\n{url}")
+    return "\n\n".join(rendered)
