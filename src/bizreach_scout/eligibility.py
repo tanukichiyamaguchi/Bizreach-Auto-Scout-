@@ -1,6 +1,6 @@
 """候補者の対象条件（必須要件）判定。
 
-条件: 27歳以上 / 3年以上の同じ会社での勤務歴 / 男性 / 大学・大学院卒業以上。
+条件: 27歳〜42歳 / 3年以上の同じ会社での勤務歴 / 男性 / 大学・大学院卒業以上。
 いずれかを満たさない（または判定不能）の場合は eligible=False とし、
 完全自動送信からは除外して「要確認」リストへ回す。
 """
@@ -32,11 +32,15 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
     failed: list[str] = []
 
     # --- 年齢 -----------------------------------------------------------------
+    # 対象は min_age 歳〜max_age 歳（両端含む）。max_age は 43歳以上を除外＝上限42歳。
     min_age = cfg.get("min_age", 27)
+    max_age = cfg.get("max_age")
     if candidate.age is None:
         failed.append("年齢が不明（要確認）")
     elif candidate.age < min_age:
         failed.append(f"年齢が{min_age}歳未満（{candidate.age}歳）")
+    elif max_age is not None and candidate.age > max_age:
+        failed.append(f"年齢が{max_age}歳超過（{candidate.age}歳）")
 
     # --- 性別 -----------------------------------------------------------------
     required_gender = cfg.get("required_gender", "male")

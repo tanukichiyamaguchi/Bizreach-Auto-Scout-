@@ -19,6 +19,29 @@ def test_too_young_fails():
     assert any("年齢" in r for r in result.failed)
 
 
+def test_age_42_passes():
+    # 上限の42歳は対象内（他条件は満たす前提。40代枠の転職回数上限=6回未満で通す）。
+    result = check_eligibility(make_candidate(age=42, current_tenure_years=4.0))
+    assert result.eligible
+
+
+def test_age_43_fails():
+    # 43歳（上限超過）は対象外。
+    result = check_eligibility(make_candidate(age=43, current_tenure_years=4.0))
+    assert not result.eligible
+    assert any("年齢が42歳超過" in r for r in result.failed)
+
+
+def test_max_age_disabled_when_unset():
+    # max_age を設定しない rules dict では年齢上限を適用しない。
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "max_age": None}}
+    result = check_eligibility(make_candidate(age=50, current_tenure_years=4.0), rules=custom)
+    assert not any("超過" in r for r in result.failed)
+
+
 def test_female_fails():
     result = check_eligibility(make_candidate(gender=Gender.female))
     assert not result.eligible
@@ -174,14 +197,14 @@ def test_30s_five_changes_fails_four_passes():
 
 
 def test_40s_six_changes_fails_five_passes():
-    # 40代以上（45歳）: 6回以上で対象外。5回はOK。
+    # 40代以上（42歳＝年齢上限内）: 6回以上で対象外。5回はOK。
     fail = check_eligibility(make_candidate(
-        age=45, current_tenure_years=4.0,
+        age=42, current_tenure_years=4.0,
         prior_companies=["A", "B", "C", "D", "E", "F"]))
     assert not fail.eligible
     assert any("転職回数が多い" in r for r in fail.failed)
     ok = check_eligibility(make_candidate(
-        age=45, current_tenure_years=4.0,
+        age=42, current_tenure_years=4.0,
         prior_companies=["A", "B", "C", "D", "E"]))
     assert ok.eligible
 
