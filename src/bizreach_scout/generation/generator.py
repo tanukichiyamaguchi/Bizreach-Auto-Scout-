@@ -8,7 +8,12 @@ from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ..config import company_config, get_settings, scout_rules
-from ..consultants import match_consultants, render_consultant_intro_section, select_intro_matches
+from ..consultants import (
+    match_consultants,
+    normalize_consultant_id,
+    render_consultant_intro_section,
+    select_intro_matches,
+)
 from ..logging_config import logger
 from ..models import Candidate, ConsultantMatch, GeneratedScout, ScoutContent
 from .prompt import EMIT_SCOUT_TOOL, build_system_prompt
@@ -112,8 +117,8 @@ class ScoutGenerator:
             matches = match_consultants(candidate, rules=rules)
         # 本文で紹介するのは上位N名まで（全員紹介は非現実的で省略の一因だった）。
         intro_matches = select_intro_matches(matches, rules)
-        resend_max = rules.get("resend", {}).get("max_consultant_mentions", 1)
-        resend_intro_matches = intro_matches[:resend_max] if resend_max else []
+        resend_max = max(0, rules.get("resend", {}).get("max_consultant_mentions", 1))
+        resend_intro_matches = intro_matches[:resend_max]
 
         system, tone_key = build_system_prompt(candidate, intro_matches, rules, company)
         messages: list[dict] = [{"role": "user", "content": _USER_INSTRUCTION}]
@@ -220,11 +225,15 @@ class ScoutGenerator:
     @staticmethod
     def _blurb_map(intros: object) -> dict[str, str]:
         """emit_scout の consultant_intros/resend_consultant_intros を
-        {consultant_id: blurb} の辞書へ正規化する。想定外の形は無視する。"""
+        {consultant_id: blurb} の辞書へ正規化する。想定外の形は無視する。
+
+        キーは normalize_consultant_id() で正規化する（モデルが 'Inoue' のように
+        大文字始まりで返しても consultants.json 側の 'inoue' と一致させるため）。
+        """
         if not isinstance(intros, list):
             return {}
         return {
-            str(item.get("consultant_id", "")).strip(): str(item.get("blurb", ""))
+            normalize_consultant_id(str(item.get("consultant_id", ""))): str(item.get("blurb", ""))
             for item in intros
             if isinstance(item, dict) and item.get("consultant_id")
         }
@@ -252,11 +261,15 @@ class ScoutGenerator:
             if not expected:
                 return
             have = {
-                str(x.get("consultant_id", "")).strip()
+                normalize_consultant_id(str(x.get("consultant_id", "")))
                 for x in (data.get(intros_key) or [])
                 if isinstance(x, dict) and str(x.get("blurb", "")).strip()
             }
-            missing = [m.consultant.display_name for m in expected if m.consultant.id not in have]
+            missing = [
+                m.consultant.display_name
+                for m in expected
+                if normalize_consultant_id(m.consultant.id) not in have
+            ]
             if missing:
                 issues.append(
                     f"{intros_key}（{label}）に以下のコンサルタントの紹介が不足しています。"
@@ -269,6 +282,11 @@ class ScoutGenerator:
         if intro_matches and not str(data.get("consultant_intro_lead", "")).strip():
             issues.append(
                 "consultant_intro_lead（コンサルタント紹介の導入文）が空です。追加してください。"
+            )
+        if resend_intro_matches and not str(data.get("resend_consultant_intro_lead", "")).strip():
+            issues.append(
+                "resend_consultant_intro_lead（再送のコンサルタント紹介導入文）が空です。"
+                "追加してください。"
             )
 
         return issues

@@ -87,11 +87,20 @@ def test_select_intro_matches_caps_to_configured_max():
     assert capped[0].consultant.id == matches[0].consultant.id  # 優先順位の先頭を維持
 
 
-def test_select_intro_matches_unlimited_when_zero():
+def test_select_intro_matches_zero_means_none():
+    # resend.max_consultant_mentions と同じ「0=紹介しない」の意味に統一する。
+    # （運用者が機能オフのつもりで0を設定した際、全員紹介が復活しないように）
     cand = make_candidate(prior_companies=["リクルート"], industry="人材")
     matches = match_consultants(cand, consultants=SAMPLE)
     capped = select_intro_matches(matches, rules={"matching": {"max_intro_consultants": 0}})
-    assert capped == matches
+    assert capped == []
+
+
+def test_select_intro_matches_negative_clamped_to_zero():
+    cand = make_candidate(prior_companies=["リクルート"], industry="人材")
+    matches = match_consultants(cand, consultants=SAMPLE)
+    capped = select_intro_matches(matches, rules={"matching": {"max_intro_consultants": -1}})
+    assert capped == []
 
 
 def test_select_intro_matches_default_caps_at_three():
@@ -125,6 +134,38 @@ def test_render_consultant_intro_section_format():
     )
     # 2人目以降は空行で区切られた独立ブロック。
     assert "\n\nBさんの紹介文。\n▼B次郎 プロフィール\nhttps://example.com/b" in section
+
+
+def test_render_consultant_intro_section_case_insensitive_consultant_id():
+    # モデルが consultant_id を 'Inoue' のように大文字始まりで返しても
+    # カタログ側の 'inoue' と一致させ、紹介ブロックを取りこぼさない。
+    m1 = ConsultantMatch(
+        consultant=ConsultantProfile(id="inoue", display_name="井ノ上 貴之",
+                                     profile_url="https://example.com/inoue"),
+        common_points=["共通点"],
+    )
+    section = render_consultant_intro_section("導入文", {"Inoue": "紹介文。"}, [m1])
+    assert "▼井ノ上 貴之 プロフィール" in section
+    assert "紹介文。" in section
+
+
+def test_render_consultant_intro_section_strips_duplicate_heading_and_url():
+    # モデルが指示に反しblurb内に▼見出しとURLを重複して書いてしまっても、
+    # 最終出力では1回だけしか出現しない（二重表示を防ぐ）。
+    m1 = ConsultantMatch(
+        consultant=ConsultantProfile(id="a", display_name="A太郎",
+                                     profile_url="https://example.com/a"),
+        common_points=["共通点"],
+    )
+    bad_blurb = (
+        "Aさんは共通点があります。\n"
+        "▼A太郎 プロフィール\n"
+        "https://example.com/a"
+    )
+    section = render_consultant_intro_section("導入文", {"a": bad_blurb}, [m1])
+    assert section.count("▼A太郎 プロフィール") == 1
+    assert section.count("https://example.com/a") == 1
+    assert "Aさんは共通点があります。" in section
 
 
 def test_render_consultant_intro_section_skips_missing_blurb():

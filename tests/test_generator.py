@@ -222,6 +222,63 @@ def test_missing_consultant_intro_triggers_retry_and_fixes_it():
     assert "▼井ノ上 貴之 プロフィール" in scout.first.body
 
 
+def test_case_insensitive_consultant_id_is_not_flagged_as_missing():
+    # モデルが consultant_id を大文字始まりで返しても「省略」と誤検知して
+    # 不要な修正リトライを起こさず、紹介ブロックも正しく表示されること。
+    matches = [ConsultantMatch(consultant=_INOUE, common_points=["共通点"])]
+    payload = dict(
+        VALID_INPUT,
+        consultant_intro_lead="ご紹介します。",
+        consultant_intros=[{"consultant_id": "Inoue", "blurb": "井ノ上貴之を紹介します。"}],
+        # 再送側も同じ大文字始まりを検証対象に含める（大小文字非依存を両方で確認）。
+        resend_consultant_intro_lead="再送でもご紹介します。",
+        resend_consultant_intros=[{"consultant_id": "Inoue", "blurb": "再送用紹介文。"}],
+    )
+    calls: list[dict] = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        block = SimpleNamespace(type="tool_use", name="emit_scout", input=payload, id="t1")
+        return SimpleNamespace(content=[block])
+
+    gen = ScoutGenerator(
+        client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
+    scout = gen.generate(make_candidate(), matches=matches)
+
+    assert len(calls) == 1  # 誤検知による不要な修正リトライが発生しない
+    assert "▼井ノ上 貴之 プロフィール" in scout.first.body
+
+
+def test_missing_resend_consultant_intro_lead_triggers_retry():
+    # 初回側(consultant_intro_lead)と同じチェックが再送側にも対称に効くこと
+    # （非対称バグの回帰テスト）。
+    matches = [ConsultantMatch(consultant=_INOUE, common_points=["共通点"])]
+    incomplete = dict(
+        VALID_INPUT,
+        consultant_intro_lead="ご紹介します。",
+        consultant_intros=[{"consultant_id": "inoue", "blurb": "井ノ上貴之を紹介します。"}],
+        resend_consultant_intro_lead="",
+        resend_consultant_intros=[{"consultant_id": "inoue", "blurb": "再送用紹介文。"}],
+    )
+    complete = dict(incomplete, resend_consultant_intro_lead="再送でもご紹介します。")
+    calls: list[dict] = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        payload = incomplete if len(calls) == 1 else complete
+        block = SimpleNamespace(
+            type="tool_use", name="emit_scout", input=payload, id=f"t{len(calls)}"
+        )
+        return SimpleNamespace(content=[block])
+
+    gen = ScoutGenerator(
+        client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
+    scout = gen.generate(make_candidate(), matches=matches)
+
+    assert len(calls) == 2  # 再送導入文の欠落を検知→2回目で修正
+    assert "再送でもご紹介します。" in scout.resend.body
+
+
 def test_validation_retry_survives_missing_tool_output_itself():
     # 検証リトライ(2回目)自体がadaptive+autoでツール未出力になっても、
     # 強制tool_choiceフォールバックで復旧しクラッシュしないことを確認する
