@@ -22,6 +22,11 @@ def test_recruit_special_instruction_mentions_count():
     text = render_special_instructions(cand)
     assert "リクルート出身" in text
     assert "7名" in text
+    # 共通点コンサルタントの紹介は自由文(本文添付)ではなく専用フィールド
+    # (consultant_intros)へ委譲する新指示になっていること（旧文言への回帰を検知）。
+    assert "consultant_intros" in text
+    assert "省略禁止" in text
+    assert "本文に分かりやすく添付" not in text
 
 
 def test_insurance_special_instruction_has_url():
@@ -30,6 +35,10 @@ def test_insurance_special_instruction_has_url():
     text = render_special_instructions(cand)
     assert "プルデンシャル" in text
     assert "https://www.consuldent.jp/recruitment/2020/04/3272/" in text
+    # URLはscout_reason経由、コンサルタント紹介はconsultant_intros経由と明記
+    # されていること（旧「本文に紹介してください」への回帰を検知）。
+    assert "scout_reasonで紹介" in text
+    assert "consultant_intros" in text
 
 
 def test_tone_selection_by_age():

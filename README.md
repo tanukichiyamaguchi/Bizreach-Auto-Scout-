@@ -122,16 +122,18 @@ bizscout import-consultants path/to/consultant_profiles_v2.docx
 
 ## コンサルタント共通点マッチング
 
-`consultant_profiles_v2.docx` を取り込み、候補者と**共通点（前職・業界・大学・職種）のある在籍コンサルタント**を抽出して本文に自然に織り込みます。
+`consultant_profiles_v2.docx` を取り込み、候補者と**共通点（前職・業界・大学・職種）のある在籍コンサルタント**を抽出します。
 
 ```bash
 bizscout import-consultants consultant_profiles_v2.docx --out config/consultants.json
 ```
 
+紹介する人数は `scout_rules.yaml` の `matching.max_intro_consultants`（既定3名。優先度順=リクルート/保険→共通点数の多い順で上位N名）で上限を設けています。共通点コンサルタントの紹介は、本文中で1人ずつ独立したブロック（紹介文＋▼氏名 プロフィール＋URL）としてシステムが組み立てます（文章を連結せず視認性を優先）。生成モデルへの指示（emit_scoutツールの`consultant_intros`）は必須項目とし、省略された場合は1回だけ修正リトライで再取得します。
+
 特別ルール（仕様に準拠）:
-- **リクルート出身**の候補者 → リクルート出身コンサルタントが7名在籍する旨を明記し、共通点のあるメンバー全員の紹介URLを添付。
+- **リクルート出身**の候補者 → リクルート出身コンサルタントが7名在籍する旨を明記し、共通点のあるメンバー全員を紹介対象に含める。
 - **保険業界出身**の候補者 → プルデンシャル生命出身者の在籍をアピールし、専用URLを紹介。
-- 再送文でも共通点のあるメンバーに（数を絞って）言及。
+- 再送文でも共通点のあるメンバーに（`resend.max_consultant_mentions`名まで）同じ形式で言及。
 
 > docx のレイアウトは固定でないため、取り込み後は `config/consultants.json` を必ず目視確認してください。
 
@@ -175,7 +177,7 @@ cp config/bizreach_selectors.example.yaml config/bizreach_selectors.yaml
 - **kill switch**: `BIZSCOUT_KILL_SWITCH` のファイルを作成すると即時に送信停止。
 - **送信上限**: `BIZSCOUT_MAX_SENDS_PER_RUN`。
 - **重複防止**: 同一会員番号への初回は二度生成・送信しない（SQLite管理）。
-- **対象条件**: 27歳〜42歳／同一企業3年以上／男性／大学卒以上を満たさない（または不明の）候補者は自動送信から除外し「要確認」として記録（`bizscout report`）。
+- **対象条件**: 27歳〜42歳／同一企業2.5年以上／男性／大学卒以上を満たさない（または不明の）候補者は自動送信から除外し「要確認」として記録（`bizscout report`）。
 - **人間的な間隔**: 送信間隔・操作間にランダム待機。
 
 ---

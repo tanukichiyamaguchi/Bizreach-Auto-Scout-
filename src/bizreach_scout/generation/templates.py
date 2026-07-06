@@ -40,6 +40,10 @@ class FirstSections(BaseModel):
 
     greeting_offer: str  # ④
     scout_reason: str  # ⑤
+    # 共通点コンサルタント紹介ブロック（consultants.render_consultant_intro_section で
+    # システムが組み立て済み。1人ずつ独立したブロック＝▼名前 プロフィール＋URL）。
+    # 共通点のあるコンサルタントがいない場合は空文字（本文からは自動的に省かれる）。
+    consultant_intro: str = ""
     company_intro: str  # ⑥
     career_title: str  # ⑦タイトル
     career_body: str  # ⑦本文
@@ -100,6 +104,7 @@ def assemble_first_body(member_no: str, sec: FirstSections, company_cfg: dict) -
         _header(member_no),
         sec.greeting_offer.strip(),
         sec.scout_reason.strip(),
+        sec.consultant_intro.strip(),
         sec.company_intro.strip(),
         _titled_section(sec.career_title, sec.career_body),
         _titled_section(sec.position_title, sec.position_body),
@@ -111,11 +116,14 @@ def assemble_first_body(member_no: str, sec: FirstSections, company_cfg: dict) -
     return "\n\n".join(p for p in parts if p)
 
 
-def assemble_resend_body(member_no: str, resend_core: str, company_cfg: dict) -> str:
+def assemble_resend_body(
+    member_no: str, resend_core: str, company_cfg: dict, resend_consultant_intro: str = ""
+) -> str:
     """再送本文を組み立てる。初回より短く、熱意を前面に。フッター(⑫)は付けない。"""
     parts = [
         _header(member_no),
         resend_core.strip(),
+        resend_consultant_intro.strip(),
         CASUAL_MEETING,
         TAP_GUIDE,
         build_signature(company_cfg),
