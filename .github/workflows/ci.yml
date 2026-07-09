@@ -5,9 +5,18 @@ on:
     branches: ["**"]
   pull_request:
 
+# 同一ブランチ/PRで新しい実行が始まったら、進行中の古い実行はキャンセルする
+# （プッシュ連打時の無駄と、稀にハングした実行が居座り続けるのを抑える）。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 通常は1分未満で完了する。GitHubランナーがハングしても長時間居座らせないための保険
+    # （今回の「16分ハング→失敗」や、最悪6時間の既定タイムアウトまで居座るのを防ぐ）。
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
