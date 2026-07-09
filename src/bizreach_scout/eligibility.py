@@ -1,6 +1,7 @@
 """候補者の対象条件（必須要件）判定。
 
-条件: 27歳〜42歳 / 2.5年以上の同じ会社での勤務歴 / 男性 / 大学・大学院卒業以上。
+条件: 27歳〜42歳 / 2.5年以上の同じ会社での勤務歴 / 男性 / 大学・大学院卒業以上 /
+国内の教育機関出身 / 日本語ネイティブ（の可能性が高い）。
 いずれかを満たさない（または判定不能）の場合は eligible=False とし、
 完全自動送信からは除外して「要確認」リストへ回す。
 """
@@ -18,6 +19,23 @@ _EDU_MAP = {
     "master": Education.master,
     "doctor": Education.doctor,
 }
+
+# 日本語検定（JLPT等）の保有を「日本語ネイティブでない」ことの代替シグナルとして扱う
+# キーワード（レジュメには母語・ネイティブ言語のフィールドが無いための代替判定）。
+_JAPANESE_CERT_KEYWORDS_JA = ("日本語能力試験", "日本語検定")
+_JAPANESE_CERT_KEYWORD_EN = "JLPT"
+
+
+def _has_japanese_proficiency_cert(candidate: Candidate) -> bool:
+    """日本語検定（JLPT等）の保有をテキストから検知する。
+
+    日本語ネイティブは通常この種の検定を受けない前提の代替シグナル。
+    raw_profile（Bizreach APIでは資格欄を含む）・summary・languages を横断して検索する。
+    """
+    haystack = "\n".join([candidate.raw_profile, candidate.summary, candidate.languages])
+    if any(k in haystack for k in _JAPANESE_CERT_KEYWORDS_JA):
+        return True
+    return _JAPANESE_CERT_KEYWORD_EN in haystack.upper()
 
 
 def check_eligibility(candidate: Candidate, rules: dict | None = None,
@@ -56,6 +74,18 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
         failed.append("学歴が不明（要確認）")
     elif not candidate.education.meets(min_edu):
         failed.append(f"学歴が{min_edu.value}未満（{candidate.education.value}）")
+
+    # --- 学歴（海外の教育機関）は対象外 -----------------------------------------
+    # 最終学歴の学校名に日本語表記が無く英語表記のみの場合を海外教育機関とみなす
+    # （Bizreach APIのレジュメには学校の所在国フィールドが無いための代替シグナル。
+    #  CSV/テキスト取り込みでは判定材料が無いため常に False＝この条件では対象外にしない）。
+    if cfg.get("exclude_overseas_education", True) and candidate.overseas_education:
+        failed.append("海外の教育機関出身のため対象外")
+
+    # --- 言語（日本語以外がネイティブレベル）は対象外 ----------------------------
+    # 日本語検定（JLPT等）の保有を非ネイティブの代替シグナルとして扱う。
+    if cfg.get("exclude_non_japanese_native", True) and _has_japanese_proficiency_cert(candidate):
+        failed.append("日本語検定の保有により日本語ネイティブでない可能性があるため対象外")
 
     # --- 同一企業での勤続年数 -------------------------------------------------
     min_years = cfg.get("min_same_company_years", 2.5)

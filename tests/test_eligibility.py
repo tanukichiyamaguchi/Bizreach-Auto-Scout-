@@ -79,6 +79,58 @@ def test_low_education_fails():
     assert any("学歴" in r for r in result.failed)
 
 
+# --- 海外の教育機関出身は対象外 -----------------------------------------------
+
+def test_overseas_education_fails():
+    result = check_eligibility(make_candidate(overseas_education=True))
+    assert not result.eligible
+    assert any("海外の教育機関" in r for r in result.failed)
+
+
+def test_domestic_education_passes():
+    result = check_eligibility(make_candidate(overseas_education=False))
+    assert result.eligible
+
+
+def test_exclude_overseas_education_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_overseas_education": False}}
+    result = check_eligibility(make_candidate(overseas_education=True), rules=custom)
+    assert not any("海外の教育機関" in r for r in result.failed)
+
+
+# --- 日本語以外がネイティブレベルの人は対象外（日本語検定の保有を代替シグナルに）---
+
+def test_japanese_proficiency_cert_in_raw_profile_fails():
+    result = check_eligibility(make_candidate(raw_profile="資格: 日本語能力試験N1、TOEIC 800"))
+    assert not result.eligible
+    assert any("日本語検定" in r for r in result.failed)
+
+
+def test_jlpt_keyword_in_summary_fails():
+    result = check_eligibility(make_candidate(summary="JLPT N1保有。営業経験8年。"))
+    assert not result.eligible
+    assert any("日本語検定" in r for r in result.failed)
+
+
+def test_no_japanese_cert_mention_passes():
+    result = check_eligibility(make_candidate(raw_profile="資格: TOEIC 800、簿記2級"))
+    assert result.eligible
+
+
+def test_exclude_non_japanese_native_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_non_japanese_native": False}}
+    result = check_eligibility(
+        make_candidate(raw_profile="資格: 日本語能力試験N1"), rules=custom
+    )
+    assert not any("日本語検定" in r for r in result.failed)
+
+
 def test_unknown_fields_need_confirmation():
     result = check_eligibility(
         make_candidate(age=None, gender=Gender.unknown, education=Education.unknown,

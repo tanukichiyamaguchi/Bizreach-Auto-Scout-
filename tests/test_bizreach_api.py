@@ -117,6 +117,45 @@ def test_resume_missing_ids_returns_none():
     assert resume_to_candidate({"age": 30}) is None
 
 
+# --- 海外教育機関の判定（ja表記の有無を代替シグナルとする）--------------------
+
+def test_domestic_education_has_japanese_name_and_is_not_overseas():
+    c = resume_to_candidate(_resume(), now=datetime(2026, 7, 1))
+    assert c.overseas_education is False
+
+
+def test_overseas_education_detected_when_no_japanese_name():
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": None, "en": "Stanford University"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is True
+    result = check_eligibility(c)
+    assert not result.eligible
+    assert any("海外の教育機関" in r for r in result.failed)
+
+
+def test_overseas_education_not_flagged_when_both_ja_and_en_missing():
+    # ja/en とも判定材料が無い場合は「海外教育機関」とは断定しない（判定不能）。
+    resume = _resume()
+    resume["educations"] = [{"schoolGrade": "Bachelors", "name": {}}]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is False
+
+
+def test_highest_ranked_entry_used_for_overseas_check():
+    # 最上位（最高ランク）の学歴レコードを海外判定にも使う（他エントリのja/enに影響されない）。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "立教大学", "en": None}},
+        {"schoolGrade": "MBA", "name": {"ja": None, "en": "Harvard Business School"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.education == Education.master
+    assert c.overseas_education is True
+
+
 def test_parse_rrsc():
     url = "https://cr-support.jp/scout/highclass/search/?rrsc=3444981"
     assert BizreachApi.parse_rrsc(url) == "3444981"

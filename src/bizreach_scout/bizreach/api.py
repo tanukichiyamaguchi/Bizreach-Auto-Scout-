@@ -129,13 +129,15 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     # エントリ順に依存せず、全学歴レコードの最上位（最高ランク）を最終学歴とする。
     education = Education.unknown
     university = ""
+    overseas_education = False
     edus = resume.get("educations") or []
     if edus:
         best_name = ""
+        best_entry = edus[0]
         for e in edus:
             g = _map_grade(e.get("schoolGrade", ""))
             if g.rank > education.rank:
-                education, best_name = g, _ja(e.get("name"))
+                education, best_name, best_entry = g, _ja(e.get("name")), e
         university = best_name or _ja(edus[0].get("name"))
         # どの学歴レコードも判別できない値のみ可視化（要マッピング追加のサイン）。
         if education is Education.unknown:
@@ -143,6 +145,12 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
             if raws:
                 logger.info("未対応の学歴グレード（要マッピング確認）: %s（mrccid=%s 大学=%s）",
                             raws, mrccid or member_no, _ja(edus[0].get("name")))
+        # 海外教育機関の判定: 最終学歴の学校名に日本語表記(ja)が無く英語表記(en)のみの
+        # 場合を海外教育機関とみなす（学校の所在国フィールドが無いための代替シグナル）。
+        name_node = best_entry.get("name") or {}
+        ja_name = _ja(name_node)
+        en_name = (name_node.get("en") or "").strip() if isinstance(name_node, dict) else ""
+        overseas_education = not ja_name and bool(en_name)
 
     # --- 職歴 ---
     companies = resume.get("companyExperiences") or []
@@ -194,6 +202,7 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         gender=gender,
         education=education,
         university=university,
+        overseas_education=overseas_education,
         current_company=current_company,
         current_title=current_title,
         current_tenure_years=current_tenure,
