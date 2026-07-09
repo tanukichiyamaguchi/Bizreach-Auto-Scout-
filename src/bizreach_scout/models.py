@@ -62,6 +62,10 @@ class Candidate(BaseModel):
     gender: Gender = Gender.unknown
     education: Education = Education.unknown
     university: str = ""
+    # 最終学歴の学校名に日本語表記(ja)が無く英語表記(en)のみの場合 True
+    # （海外の教育機関出身の可能性。Bizreach APIのレジュメには学校の所在国フィールドが
+    # 無いための代替シグナル。CSV/テキスト取り込みでは判定材料が無いため常に False）。
+    overseas_education: bool = False
 
     current_company: str = ""
     current_title: str = ""
