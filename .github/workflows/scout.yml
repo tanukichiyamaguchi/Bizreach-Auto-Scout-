@@ -29,8 +29,13 @@ on:
         options: ["scout", "pickup", "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
         default: "scout"
   schedule:
-    # 毎日 19:00 JST（10:00 UTC）。定期実行は repo variables の設定値を使う。
-    - cron: "0 10 * * *"
+    # GitHub の schedule は毎時00分が最も混雑し、数時間の遅延やドロップが起こり得る。
+    # そのため 00分を避けた分に設定し（主実行）、さらに予備の時刻を1本用意して
+    # 「その日ぜんぶ未実行」を防ぐ。重複防止(SQLite)により両方走っても二重送信にはならず、
+    # concurrency(group=bizscout-scout) で同時実行もされない。
+    # 定期実行は repo variables の設定値を使う。
+    - cron: "9 10 * * *"   # 主: 19:09 JST（10:09 UTC）
+    - cron: "39 12 * * *"  # 予備: 21:39 JST（12:39 UTC・主がドロップ/大幅遅延した日の保険）
 
 # 同時実行を禁止して二重送信を防ぐ（キューイング）。
 concurrency:
