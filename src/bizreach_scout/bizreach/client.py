@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import random
 import time
 from pathlib import Path
@@ -65,7 +66,7 @@ class BizreachClient:
                 self._browser.close()
             if self._pw:
                 self._pw.stop()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("ブラウザ終了時に例外: %s", e)
 
     def __enter__(self) -> BizreachClient:
@@ -88,7 +89,7 @@ class BizreachClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             self._context.storage_state(path=str(path))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("セッション保存に失敗: %s", e)
 
     # --- ログイン -------------------------------------------------------------
@@ -120,14 +121,12 @@ class BizreachClient:
                 link.first.click(timeout=15000)
                 # networkidle はこのサイトの常時通信(計測/ロングポーリング)で30秒
                 # 到達せずタイムアウトするため使わない。load を短時間だけ待って続行する。
-                try:
+                with contextlib.suppress(Exception):
                     self.page.wait_for_load_state("load", timeout=10000)
-                except Exception:  # noqa: BLE001
-                    pass
                 self.human_delay()
             else:
                 logger.info("グループ選択リンクが見つかりません（選択済み/不要の可能性）。")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("グループ選択でエラー: %s", e)
 
     def login(self) -> None:
@@ -145,19 +144,15 @@ class BizreachClient:
         # ログインボタンをクリック。見つからなければ Enter 送信でフォールバック。
         try:
             self.page.locator(self.sel.login_submit).first.click(timeout=5000)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.info("ログインボタンをクリックできず(%s)。Enterで送信します。", e)
             self.page.press(self.sel.login_password, "Enter")
         # networkidle はこのサイトの常時通信で到達せず30秒待つことがあるため使わない。
         # 成否はログイン済みマーカーで判定する（描画に少し猶予を与える）。
-        try:
+        with contextlib.suppress(Exception):
             self.page.wait_for_load_state("load", timeout=10000)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self.page.locator(self.sel.logged_in_marker).first.wait_for(timeout=10000)
-        except Exception:  # noqa: BLE001
-            pass
         self.human_delay()
         if self.page.locator(self.sel.logged_in_marker).count() == 0:
             logger.warning(

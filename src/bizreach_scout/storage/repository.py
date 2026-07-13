@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import uuid
@@ -69,12 +70,11 @@ class Repository:
 
     def _migrate(self) -> None:
         """既存DBへの無停止マイグレーション（列が既にあれば何もしない）。"""
-        try:
+        # duplicate column name（追加済み）は OperationalError で無視する。
+        with contextlib.suppress(sqlite3.OperationalError):
             self.conn.execute(
                 "ALTER TABLE scouts ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
             )
-        except sqlite3.OperationalError:
-            pass  # duplicate column name = 追加済み
 
     def close(self) -> None:
         self.conn.close()

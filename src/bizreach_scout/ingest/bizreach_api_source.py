@@ -16,7 +16,7 @@ from .base import CandidateSource
 class BizreachApiSource(CandidateSource):
     def __init__(
         self,
-        search_url: str,
+        search_url: str | None,
         max_candidates: int = 50,
         headless: bool = True,
         client=None,
@@ -36,6 +36,9 @@ class BizreachApiSource(CandidateSource):
             client.start()
             client.ensure_logged_in()
         try:
+            if not self.search_url:
+                logger.info("search_url 未指定のため候補者取り込みをスキップします。")
+                return
             api = BizreachApi(client)
             ids = list(api.iter_candidate_ids(self.search_url, self.max_candidates))
             logger.info("APIから %d 件の候補者IDを取得。", len(ids))

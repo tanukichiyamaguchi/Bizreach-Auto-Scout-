@@ -1,5 +1,10 @@
 # デプロイ・定期実行ガイド
 
+> **📌 現在の本番運用は GitHub Actions です**（`.github/workflows/scout.yml` /
+> 手順は `docs/GitHub Actionsで運用.md`）。定期実行は 16:09 / 18:39 JST の2枠。
+> **本ディレクトリは自前サーバ（Docker / cron / systemd）で運用する場合の参考資料**であり、
+> 以下に登場する `09:00` / `10:00` などの時刻は一例です。現行の本番スケジュールとは異なります。
+
 Bizreach Auto Scout を **Docker / cron / systemd / Windows タスクスケジューラ** で
 運用するための手順をまとめます。
 

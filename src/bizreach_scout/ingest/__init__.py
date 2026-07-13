@@ -4,4 +4,4 @@ from .base import CandidateSource
 from .csv_source import CSVSource
 from .text_source import TextSource
 
-__all__ = ["CandidateSource", "CSVSource", "TextSource"]
+__all__ = ["CSVSource", "CandidateSource", "TextSource"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from types import SimpleNamespace
 
 from bizreach_scout.models import GeneratedScout, ScoutContent
@@ -103,10 +104,8 @@ def test_crash_between_send_and_mark_reuses_idempotency_key(tmp_path):
     orig_mark_sent = repo.mark_sent
     repo.mark_sent = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("crash"))
     cand = [make_candidate(member_no="BU4100001", profile_url="https://ex.com/4")]
-    try:
+    with contextlib.suppress(RuntimeError):
         pipe.run(ListSource(cand), send=True)
-    except RuntimeError:
-        pass
     repo.mark_sent = orig_mark_sent
     # 送信はされたが sent 記録前に落ちたので status は 'sending' のまま。
     assert repo.get_scout("BU4100001", "first")["status"] == "sending"

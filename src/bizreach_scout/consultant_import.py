@@ -63,7 +63,9 @@ def _finalize(profile: dict, idx: int, rules: dict) -> ConsultantProfile | None:
     profile["tags"] = _infer_tags(profile, rules)
     for f in _LIST_FIELDS:
         profile.setdefault(f, [])
-    return ConsultantProfile(**{k: profile.get(k) for k in ConsultantProfile.model_fields})
+    # docx 由来の緩い dict から動的構築するため型は保証できない（pydantic が検証する）。
+    fields = {k: profile.get(k) for k in ConsultantProfile.model_fields}
+    return ConsultantProfile(**fields)  # type: ignore[arg-type]
 
 
 def parse_docx(path: str | Path) -> list[ConsultantProfile]:

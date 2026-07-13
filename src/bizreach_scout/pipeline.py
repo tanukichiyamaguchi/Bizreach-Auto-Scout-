@@ -10,9 +10,10 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from .config import get_settings, project_root, scout_rules
+from .config import get_settings, scout_rules
 from .eligibility import check_eligibility
-from .generation.generator import ScoutGenerator, render_for_human
+from .export import export_scout as _export_scout
+from .generation.generator import ScoutGenerator
 from .ingest.base import CandidateSource
 from .logging_config import logger
 from .models import Candidate
@@ -24,16 +25,6 @@ _REMINDER_DAYS = {3: "ThreeDays", 5: "FiveDays", 10: "TenDays"}
 def _reminder_days_after(days: int) -> str:
     """reminder の daysAfter（ThreeDays/FiveDays/TenDays）に丸める。"""
     return _REMINDER_DAYS.get(days, "FiveDays")
-
-
-def _export_scout(scout) -> None:
-    """生成したスカウトを data/exports/{会員番号}.md に書き出す（レビュー用）。"""
-    try:
-        out = project_root() / "data" / "exports"
-        out.mkdir(parents=True, exist_ok=True)
-        (out / f"{scout.member_no}.md").write_text(render_for_human(scout), encoding="utf-8")
-    except Exception as e:  # noqa: BLE001
-        logger.warning("文面のエクスポートに失敗: %s", e)
 
 
 @dataclass
@@ -188,7 +179,7 @@ class ScoutPipeline:
         else:
             try:
                 scout = self.generator.generate(candidate)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 report.failed += 1
                 report.errors.append((mno, f"生成失敗: {e}"))
                 logger.error("文面生成に失敗: %s: %s", mno, e)

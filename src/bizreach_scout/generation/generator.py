@@ -24,6 +24,20 @@ _USER_INSTRUCTION = (
     "上記の候補者について、初回送信用と再送用のスカウト2通を emit_scout ツールで出力してください。"
 )
 
+# emit_scout が必ず返すべきフィールド（欠落は生成失敗として扱う）。
+_REQUIRED_FIELDS = (
+    "subject_first", "greeting_offer", "scout_reason", "company_intro",
+    "career_title", "career_body", "position_title", "position_body",
+    "subject_resend", "resend_body",
+)
+
+
+class GenerationError(RuntimeError):
+    """emit_scout の出力が不正（必須フィールド欠落など）で組み立てできない。
+
+    pipeline 側の生成失敗ハンドリング（report.failed）に載せるための明示的な型。
+    """
+
 
 def _normalize_subject(subject: str, rules: dict, kind: str = "first") -> str:
     from .validators import subject_prefix_for
@@ -131,40 +145,74 @@ class ScoutGenerator:
 
         # バリデーション失敗時は1回だけ修正リクエスト。
         # 共通点コンサルタント紹介の省略は最重要指示のため、ここでも網羅性を検証する。
-        issues = self._collect_issues(scout, rules)
-        issues += self._consultant_coverage_issues(data, intro_matches, resend_intro_matches)
+        issues = self._all_issues(scout, data, intro_matches, resend_intro_matches, rules)
         if issues:
-            logger.warning("文面バリデーション指摘（修正を試行）: %s", issues)
-            messages.append({"role": "assistant", "content": resp.content})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": (
-                                "次の制約違反を修正し、再度 emit_scout を呼び出してください:\n- "
-                                + "\n- ".join(issues)
-                            ),
-                        }
-                    ],
-                }
-            )
-            _, data2, _ = self._call_ensuring_tool(system, messages)
-            scout2 = self._assemble(
-                candidate, data2, matches, intro_matches, resend_intro_matches,
+            scout = self._retry_with_corrections(
+                system, messages, resp, tool_block, issues,
+                candidate, matches, intro_matches, resend_intro_matches,
                 tone_key, company, rules,
             )
-            issues2 = self._collect_issues(scout2, rules)
-            issues2 += self._consultant_coverage_issues(data2, intro_matches, resend_intro_matches)
-            if not issues2:
-                scout = scout2
-            else:
-                logger.warning("修正後も指摘が残りました。生成結果を採用します。")
-                scout = scout2
-
         return scout
+
+    def _all_issues(
+        self,
+        scout: GeneratedScout,
+        data: dict,
+        intro_matches: list[ConsultantMatch],
+        resend_intro_matches: list[ConsultantMatch],
+        rules: dict,
+    ) -> list[str]:
+        """文面制約違反とコンサルタント紹介の不足をまとめて返す。"""
+        return (
+            self._collect_issues(scout, rules)
+            + self._consultant_coverage_issues(data, intro_matches, resend_intro_matches)
+        )
+
+    def _retry_with_corrections(
+        self,
+        system: str,
+        messages: list[dict],
+        resp,
+        tool_block,
+        issues: list[str],
+        candidate: Candidate,
+        matches: list[ConsultantMatch],
+        intro_matches: list[ConsultantMatch],
+        resend_intro_matches: list[ConsultantMatch],
+        tone_key: str,
+        company: dict,
+        rules: dict,
+    ) -> GeneratedScout:
+        """指摘を tool_result で返して1回だけ再生成し、再組み立てした結果を返す。
+
+        再生成後も指摘が残る場合でも、最善のものとして再生成結果を採用する
+        （元よりは指摘を減らせているため）。
+        """
+        logger.warning("文面バリデーション指摘（修正を試行）: %s", issues)
+        messages.append({"role": "assistant", "content": resp.content})
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_block.id,
+                        "content": (
+                            "次の制約違反を修正し、再度 emit_scout を呼び出してください:\n- "
+                            + "\n- ".join(issues)
+                        ),
+                    }
+                ],
+            }
+        )
+        _, data2, _ = self._call_ensuring_tool(system, messages)
+        scout2 = self._assemble(
+            candidate, data2, matches, intro_matches, resend_intro_matches,
+            tone_key, company, rules,
+        )
+        if self._all_issues(scout2, data2, intro_matches, resend_intro_matches, rules):
+            logger.warning("修正後も指摘が残りました。生成結果を採用します。")
+        return scout2
 
     def _assemble(
         self,
@@ -177,6 +225,11 @@ class ScoutGenerator:
         company: dict,
         rules: dict,
     ) -> GeneratedScout:
+        missing = [k for k in _REQUIRED_FIELDS if not str(data.get(k, "")).strip()]
+        if missing:
+            raise GenerationError(
+                "emit_scout の必須フィールドが欠落/空です: " + "、".join(missing)
+            )
         consultant_intro = render_consultant_intro_section(
             data.get("consultant_intro_lead", ""),
             self._blurb_map(data.get("consultant_intros")),

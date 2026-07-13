@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Iterator
 
@@ -52,10 +53,8 @@ class BizreachPickupSource(CandidateSource):
             page = client.page
             self._mypage_url = f"{api.base}/mypage/"
             page.goto(self._mypage_url, wait_until="domcontentloaded")
-            try:
+            with contextlib.suppress(Exception):
                 page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:  # noqa: BLE001
-                pass
             client.human_delay(2.0, 3.5)
 
             resume_ids = self._collect_resume_ids(page)
@@ -106,7 +105,7 @@ class BizreachPickupSource(CandidateSource):
                 seen[key] = seen.get(key, 0) + 1
             if seen:
                 logger.info("ピックアップのセクション構成: %s", seen)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def _resolve_mrccid(self, page, resume_id: str) -> str | None:
@@ -121,7 +120,7 @@ class BizreachPickupSource(CandidateSource):
             mrccid = m.group(1) if m else None
             self._close_lightbox(page)
             return mrccid
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("ライトボックスからのmrccid取得で例外 resume-id=%s: %s", resume_id, e)
             self._close_lightbox(page)
             return None
@@ -142,29 +141,23 @@ class BizreachPickupSource(CandidateSource):
                     loc.first.click(timeout=2000)
                     clicked = True
                     break
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         if not clicked:
-            try:
+            with contextlib.suppress(Exception):
                 page.keyboard.press("Escape")
-            except Exception:  # noqa: BLE001
-                pass
         self._ensure_drawer_closed(page)
 
     def _ensure_drawer_closed(self, page) -> None:
         """ドロワーが閉じたか確認し、残存すれば mypage へ再遷移して解消する。"""
         try:
             drawer = page.locator("#jsi_lapPageWrapper.showLapPage")
-            try:
+            with contextlib.suppress(Exception):
                 drawer.wait_for(state="detached", timeout=2000)
-            except Exception:  # noqa: BLE001
-                pass
             if drawer.count() > 0 and self._mypage_url:
                 logger.info("レジュメドロワーが残存。mypage へ再遷移して解消します。")
                 page.goto(self._mypage_url, wait_until="domcontentloaded")
-                try:
+                with contextlib.suppress(Exception):
                     page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:  # noqa: BLE001
-                    pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass

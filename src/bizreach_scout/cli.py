@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from contextlib import contextmanager
 
 import click
 
@@ -32,6 +32,23 @@ def _exit_on_total_failure(report) -> None:
     """
     if report.processed > 0 and report.sent == 0 and report.failed > 0:
         raise SystemExit(1)
+
+
+@contextmanager
+def _bizreach_client(headless: bool):
+    """ログイン済みの BizreachClient を開き、終了時に必ずクローズする。
+
+    各コマンドに散在していた start→ensure_logged_in→finally close の
+    定型処理を1箇所に集約する。
+    """
+    from .bizreach.client import BizreachClient
+
+    client = BizreachClient(headless=headless).start()
+    try:
+        client.ensure_logged_in()
+        yield client
+    finally:
+        client.close()
 
 
 def _build_source(source: str, input_path: str | None, search_url: str | None,
@@ -86,12 +103,11 @@ def generate(source: str, input_path: str | None, save: bool) -> None:
         click.echo(render_for_human(scout))
         if repo is not None:
             from .eligibility import check_eligibility
+            from .export import export_scout
 
             repo.upsert_candidate(candidate, check_eligibility(candidate))
             repo.record_generated(scout)
-            out = Path("data/exports") / f"{candidate.member_no}.md"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(render_for_human(scout), encoding="utf-8")
+            export_scout(scout)
         count += 1
     click.echo(f"\n生成完了: {count} 件")
 
@@ -159,7 +175,6 @@ def run_pickup(kind: str, max_candidates: int, send: bool, headless: bool) -> No
     """
     from .bizreach.api import BizreachApi
     from .bizreach.api_sender import ApiScoutSender
-    from .bizreach.client import BizreachClient
     from .ingest.bizreach_pickup_source import BizreachPickupSource
     from .pipeline import ScoutPipeline
 
@@ -167,20 +182,16 @@ def run_pickup(kind: str, max_candidates: int, send: bool, headless: bool) -> No
         click.echo("※ DRY_RUN 有効: 文面は用意しますが実送信は行いません。")
 
     repo = Repository()
-    client = None
     try:
-        client = BizreachClient(headless=headless).start()
-        client.ensure_logged_in()
-        sender = ApiScoutSender(BizreachApi(client), pickup=True) if send else None
-        source = BizreachPickupSource(max_candidates=max_candidates, kind=kind, client=client)
-        # ピックアップは会員ステータス条件を適用しない（ユーザー指定・本命リストのため）。
-        pipeline = ScoutPipeline(repo=repo, sender=sender, apply_status_filter=False)
-        report = pipeline.run(source, send=send)
-        click.echo(report.summary())
-        _exit_on_total_failure(report)
+        with _bizreach_client(headless) as client:
+            sender = ApiScoutSender(BizreachApi(client), pickup=True) if send else None
+            source = BizreachPickupSource(max_candidates=max_candidates, kind=kind, client=client)
+            # ピックアップは会員ステータス条件を適用しない（ユーザー指定・本命リストのため）。
+            pipeline = ScoutPipeline(repo=repo, sender=sender, apply_status_filter=False)
+            report = pipeline.run(source, send=send)
+            click.echo(report.summary())
+            _exit_on_total_failure(report)
     finally:
-        if client:
-            client.close()
         repo.close()
 
 
@@ -270,17 +281,11 @@ def login(headless: bool) -> None:
     GitHub Actions で運用する場合に secret(BIZREACH_STORAGE_STATE_B64)へ
     base64 で登録すると、CI 上の自動ログイン/2FA を回避できます。
     """
-    from .bizreach.client import BizreachClient
-
-    client = BizreachClient(headless=headless).start()
-    try:
-        client.ensure_logged_in()
+    with _bizreach_client(headless) as client:
         path = client._storage_state_path()
         click.echo(f"\nセッションを保存しました: {path}")
         click.echo("GitHub Actions 用に base64 化するには:")
         click.echo(f"  base64 -w0 {path}    # この出力を secret BIZREACH_STORAGE_STATE_B64 に登録")
-    finally:
-        client.close()
 
 
 @cli.command(name="probe-send")
@@ -294,12 +299,9 @@ def probe_send(mrccid: str | None, search_url: str | None, headless: bool) -> No
     絶対に行われません。data/exports に DOM・スクショ・捕捉した送信POSTを保存します。
     """
     from .bizreach.api import BizreachApi
-    from .bizreach.client import BizreachClient
     from .bizreach.send_probe import SendProbe
 
-    client = BizreachClient(headless=headless).start()
-    try:
-        client.ensure_logged_in()
+    with _bizreach_client(headless) as client:
         target = mrccid
         if not target:
             if not search_url:
@@ -312,8 +314,6 @@ def probe_send(mrccid: str | None, search_url: str | None, headless: bool) -> No
             click.echo(f"検索先頭の候補者を使用: mrccid={target}")
         SendProbe(client).run(target, search_url=search_url)
         click.echo("偵察完了。data/exports の probe_* を確認してください（実送信はしていません）。")
-    finally:
-        client.close()
 
 
 @cli.command(name="test-send")
@@ -327,11 +327,8 @@ def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
     各APIレスポンスを表示する。実際のスカウトは送信されない。
     """
     from .bizreach.api import BizreachApi
-    from .bizreach.client import BizreachClient
 
-    client = BizreachClient(headless=headless).start()
-    try:
-        client.ensure_logged_in()
+    with _bizreach_client(headless) as client:
         api = BizreachApi(client)
 
         from .config import scout_job_id
@@ -379,8 +376,6 @@ def test_send(search_url: str, mrccid: str | None, headless: bool) -> None:
                        "別の候補者で再確認してください。")
         else:
             click.echo("\n⚠️ 検証に失敗しました。上記レスポンスを確認してください。")
-    finally:
-        client.close()
 
 
 @cli.command(name="test-pickup-send")
@@ -396,13 +391,10 @@ def test_pickup_send(kind: str, mrccid: str | None, headless: bool) -> None:
     本番(dry_run=false)前に、まだ一度も呼ばれていないピックアップ送信経路を潰すためのもの。
     """
     from .bizreach.api import BizreachApi
-    from .bizreach.client import BizreachClient
     from .config import scout_job_id
     from .ingest.bizreach_pickup_source import BizreachPickupSource
 
-    client = BizreachClient(headless=headless).start()
-    try:
-        client.ensure_logged_in()
+    with _bizreach_client(headless) as client:
         api = BizreachApi(client)
 
         job_id = scout_job_id()
@@ -433,8 +425,6 @@ def test_pickup_send(kind: str, mrccid: str | None, headless: bool) -> None:
         else:
             click.echo("\n⚠️ ピックアップ送信APIが 200/201 以外を返しました。"
                        "上記レスポンスを確認してください（本番前に要修正）。")
-    finally:
-        client.close()
 
 
 @cli.command(name="probe-pickup")
@@ -445,16 +435,11 @@ def probe_pickup(headless: bool) -> None:
     mypage を開いて /api/ の通信を data/exports に保存する。ピックアップ候補者リストの
     エンドポイントを特定するために使う。
     """
-    from .bizreach.client import BizreachClient
     from .bizreach.pickup_probe import PickupProbe
 
-    client = BizreachClient(headless=headless).start()
-    try:
-        client.ensure_logged_in()
+    with _bizreach_client(headless) as client:
         PickupProbe(client).run()
         click.echo("偵察完了。data/exports の pickup_* を確認してください（実送信なし）。")
-    finally:
-        client.close()
 
 
 @cli.command()

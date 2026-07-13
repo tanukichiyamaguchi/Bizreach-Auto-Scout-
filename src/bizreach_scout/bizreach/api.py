@@ -260,7 +260,7 @@ class BizreachApi:
         try:
             data = resp.json()
             return data if isinstance(data, dict) else None
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     @staticmethod
@@ -269,7 +269,7 @@ class BizreachApi:
         try:
             q = parse_qs(urlparse(search_url).query)
             return q.get("rrsc", [None])[0]
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     def get_saved_search(self, rrsc: str) -> dict | None:
@@ -283,7 +283,7 @@ class BizreachApi:
             return resp.json()
         except BizreachAuthError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("検索条件の取得で例外: %s", e)
             return None
 
@@ -357,7 +357,7 @@ class BizreachApi:
             return resp.json()
         except BizreachAuthError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("レジュメ取得で例外 mrccid=%s: %s", mrccid, e)
             return None
 
@@ -399,7 +399,7 @@ class BizreachApi:
         out = {"status": resp.status}
         try:
             out.update(resp.json())
-        except Exception:  # noqa: BLE001
+        except Exception:
             out["text"] = resp.text()[:2000]
         # 認証切れは恒久エラーとして即座に浮上させる（緑のまま全滅を防ぐ）。
         self._raise_on_auth_error(out.get("status", 0), out)
@@ -422,7 +422,7 @@ class BizreachApi:
                     if token:
                         logger.info("ワンタイムトークンを取得 (%s)", path)
                         return token
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         logger.info("ワンタイムトークンを取得できませんでした（通常送信は不可の可能性）。")
         return None
@@ -437,10 +437,10 @@ class BizreachApi:
             out = {"status": resp.status}
             try:
                 out.update(resp.json())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 out["text"] = resp.text()[:500]
             return out
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("プラチナ残数の取得で例外: %s", e)
             return {"status": 0, "error": str(e)}
 
@@ -459,7 +459,7 @@ class BizreachApi:
                                    {"jobId": job_id, "mrccids": mrccids}, {})
         except BizreachAuthError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("送信前チェックで例外: %s", e)
             return {"status": 0, "error": str(e)}
 
@@ -487,7 +487,7 @@ class BizreachApi:
             out = self._post_json("/api/v2/scouts/candidates", payload, headers)
         except BizreachAuthError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("スカウト送信で例外 mrccid=%s: %s", mrccid, e)
             return {"status": 0, "error": str(e)}
         self._log_send_result("通常", mrccid, dry_run, out)
@@ -511,7 +511,7 @@ class BizreachApi:
             out = self._post_json("/api/v2/scouts/platinum", payload, headers)
         except BizreachAuthError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("プラチナ送信で例外 mrccid=%s: %s", mrccid, e)
             return {"status": 0, "error": str(e)}
         self._log_send_result("プラチナ", mrccid, dry_run, out)
@@ -538,7 +538,7 @@ class BizreachApi:
             out = self._post_json("/api/v2/scouts/pickup", payload, headers)
         except BizreachAuthError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("ピックアップ送信で例外 mrccid=%s: %s", mrccid, e)
             return {"status": 0, "error": str(e)}
         self._log_send_result("ピックアップ", mrccid, dry_run, out)

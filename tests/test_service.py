@@ -7,6 +7,7 @@ BizreachClient・ApiScoutSender・BizreachApiSource を monkeypatch で差し替
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -16,7 +17,7 @@ from bizreach_scout import service
 class FakeClient:
     """BizreachClient のスタブ。ブラウザを起動しない。"""
 
-    instances: list[FakeClient] = []
+    instances: ClassVar[list[FakeClient]] = []
 
     def __init__(self, *args, **kwargs):
         self.started = False
@@ -38,7 +39,7 @@ class FakeClient:
 class FakePipeline:
     """ScoutPipeline のスタブ。run で固定レポートを返す。"""
 
-    instances: list[FakePipeline] = []
+    instances: ClassVar[list[FakePipeline]] = []
 
     def __init__(self, repo=None, generator=None, sender=None):
         self.repo = repo
@@ -64,7 +65,7 @@ class FakePipeline:
 class FakeRepository:
     """Repository のスタブ。close されたことだけ記録する。"""
 
-    instances: list[FakeRepository] = []
+    instances: ClassVar[list[FakeRepository]] = []
 
     def __init__(self, *args, **kwargs):
         self.closed = False
