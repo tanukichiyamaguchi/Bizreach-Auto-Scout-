@@ -135,8 +135,11 @@ class Repository:
         ).fetchone()
 
     # --- スカウトの記録 -------------------------------------------------------
-    def record_generated(self, scout: GeneratedScout, resend_after_days: int) -> None:
-        """初回・再送を generated 状態で保存。再送には scheduled_at を仮設定。"""
+    def record_generated(self, scout: GeneratedScout) -> None:
+        """初回・再送を generated 状態で保存する。
+
+        再送の scheduled_at は初回送信時（mark_sent）に確定するため、ここでは設定しない。
+        """
         now = _now_iso()
         # 初回（送信前なので scheduled_at は未設定）
         self._insert_scout(scout.member_no, "first", scout.first.subject, scout.first.body,

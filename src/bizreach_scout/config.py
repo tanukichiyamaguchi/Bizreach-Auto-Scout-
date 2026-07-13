@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     # 全候補者へ再送信してしまう事故を防ぐための安全弁（本番CIでのみ true 推奨）。
     expect_state: bool = False
 
-    # 再送
-    resend_after_days: int = 5
+    # 再送までの日数は scout_rules.yaml resend.after_days が単一情報源
+    # （config.resend_after_days() 経由で参照する）。
 
     # ブラウザ（bot検知対策で実ブラウザのUAに寄せる）
     user_agent: str = (
@@ -116,7 +116,19 @@ def company_config() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def scout_rules() -> dict[str, Any]:
-    return _load_yaml(project_root() / "config" / "scout_rules.yaml")
+    """scout_rules.yaml を読み、型付きスキーマで検証して返す。
+
+    未知キー（タイポ）や型不正があれば起動時に ValidationError を送出する。
+    戻り値は従来どおり dict（呼び出し側の署名変更は不要）。
+    """
+    from .rules import validate_rules
+
+    return validate_rules(_load_yaml(project_root() / "config" / "scout_rules.yaml"))
+
+
+def resend_after_days() -> int:
+    """再送までの日数の単一情報源（scout_rules.yaml resend.after_days）。"""
+    return int(scout_rules().get("resend", {}).get("after_days", 5))
 
 
 def scout_job_id() -> str | None:

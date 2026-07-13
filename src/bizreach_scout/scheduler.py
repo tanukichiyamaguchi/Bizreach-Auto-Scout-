@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .config import get_settings
+from .config import get_settings, resend_after_days
 from .logging_config import logger
 from .storage.repository import Repository
 
@@ -66,7 +66,7 @@ def run_due_resends(repo: Repository, sender, now: datetime | None = None) -> Re
         outcome = sender.send_scout(candidate, row["subject"], row["body"],
                                     idempotency_key=idem_key)
         if outcome.status == "sent":
-            repo.mark_sent(mno, "resend", settings.resend_after_days)
+            repo.mark_sent(mno, "resend", resend_after_days())
             report.sent += 1
             logger.info("再送完了: %s", mno)
             time.sleep(random.uniform(settings.send_delay_min,
