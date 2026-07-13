@@ -96,6 +96,66 @@ def _en(node) -> str:
     return ""
 
 
+# --- 語学欄の抽出 -----------------------------------------------------------
+# ビズリーチのレジュメJSONで語学欄が入っている可能性のあるフィールド名（実データで
+# 確定するまでの候補）。1件でも該当すれば採用する。
+_LANGUAGE_KEYS = (
+    "languages", "languageSkills", "languageExperiences",
+    "foreignLanguages", "languageAbilities", "languageList",
+)
+# 語学エントリ内で「言語名」を持つ可能性のあるキー。
+_LANG_NAME_KEYS = ("name", "language", "languageName", "languageType", "type")
+# 語学エントリ内で「レベル」を持つ可能性のあるキー。
+_LANG_LEVEL_KEYS = ("level", "proficiency", "languageLevel", "skillLevel", "grade", "ability")
+
+# 語学欄フィールド名を実データから特定するための調査ログ（各1回だけ出す）。
+_logged_resume_keys = False
+_logged_language_field = False
+
+
+def _lang_field(item: dict, keys: tuple[str, ...]) -> str:
+    """語学エントリから、候補キーのうち最初に値が取れたもの（ja→en→文字列）を返す。"""
+    for k in keys:
+        if k in item and (s := (_ja(item[k]) or _en(item[k]))):
+            return s
+    return ""
+
+
+def _extract_languages(resume: dict) -> str:
+    """レジュメの語学欄を「言語名：レベル」形式の文字列に変換する。
+
+    語学欄のフィールド名が実データで未確定のため、複数の候補キーを順に試す。
+    フィールド名特定のため、レジュメのトップレベルのキー一覧と、検出した語学欄を
+    それぞれ1回だけログ出力する（キー名・語学欄のみで、氏名等の個人情報は含まない）。
+    """
+    global _logged_resume_keys, _logged_language_field
+    if not _logged_resume_keys:
+        logger.info("レジュメのトップレベルキー（語学欄フィールド特定用）: %s", sorted(resume.keys()))
+        _logged_resume_keys = True
+
+    for key in _LANGUAGE_KEYS:
+        val = resume.get(key)
+        entries: list[str] = []
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    name = _lang_field(item, _LANG_NAME_KEYS)
+                    if name:
+                        level = _lang_field(item, _LANG_LEVEL_KEYS)
+                        entries.append(f"{name}：{level}".rstrip("："))
+                elif isinstance(item, str) and item.strip():
+                    entries.append(item.strip())
+        elif isinstance(val, str) and val.strip():
+            entries.append(val.strip())
+        if entries:
+            text = "、".join(entries)
+            if not _logged_language_field:
+                logger.info("語学欄フィールドを検出: '%s' → %s", key, text[:200])
+                _logged_language_field = True
+            return text
+    return ""
+
+
 def _years_since(period_from: dict | None, now: datetime | None = None) -> float | None:
     if not period_from or "year" not in period_from:
         return None
@@ -239,6 +299,7 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         summary=summary,
         raw_profile=raw_profile,
         foreign_text=foreign_text,
+        languages=_extract_languages(resume),
         source="bizreach",
         intention=resume.get("intention") or [],
         resume_updated_status=resume.get("resumeUpdatedStatus") or "",

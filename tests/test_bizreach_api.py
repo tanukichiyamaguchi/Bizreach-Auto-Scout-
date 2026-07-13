@@ -8,6 +8,7 @@ from pathlib import Path
 
 from bizreach_scout.bizreach.api import (
     BizreachApi,
+    _extract_languages,
     _income_label,
     _map_grade,
     resume_to_candidate,
@@ -237,6 +238,53 @@ def test_japanese_resume_with_english_school_name_still_eligible():
     # 本文が日本語主体なら英語優勢とは見なさず対象のまま（誤検出しない）。
     c = resume_to_candidate(_resume(), now=datetime(2026, 7, 1))
     assert "Waseda University" in c.foreign_text
+    assert check_eligibility(c).eligible
+
+
+# --- 語学欄の抽出（フィールド名は実データで確定するまで複数候補を試す）------------
+
+def test_extract_languages_from_dict_entries():
+    # {name:{ja/en}, level} 構造（レベルが日本語表記／英語コードのいずれも対応）。
+    r = {"languages": [
+        {"name": {"ja": "英語", "en": "English"}, "level": "ネイティブ"},
+        {"name": {"ja": "日本語"}, "level": "日常会話"},
+    ]}
+    assert _extract_languages(r) == "英語：ネイティブ、日本語：日常会話"
+
+
+def test_extract_languages_alternate_keys():
+    # 別候補のフィールド名・キー（languageSkills / language / proficiency）でも拾う。
+    r = {"languageSkills": [{"language": {"ja": "中国語"}, "proficiency": "Native"}]}
+    assert _extract_languages(r) == "中国語：Native"
+
+
+def test_extract_languages_string_form_and_absent():
+    assert _extract_languages({"languages": "英語（ネイティブ）"}) == "英語（ネイティブ）"
+    assert _extract_languages({"foo": 1}) == ""  # 語学欄なし
+
+
+def test_resume_with_native_foreign_language_is_ineligible():
+    # 語学欄で外国語がネイティブ → 外国人として除外（本文は日本語のまま）。
+    resume = _resume()
+    resume["languages"] = [
+        {"name": {"ja": "日本語"}, "level": "日常会話"},
+        {"name": {"ja": "英語"}, "level": "ネイティブ"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert "英語：ネイティブ" in c.languages
+    result = check_eligibility(c)
+    assert not result.eligible
+    assert any("語学欄で外国語がネイティブ" in r for r in result.failed)
+
+
+def test_resume_with_business_foreign_language_is_eligible():
+    # 語学欄で外国語がビジネスレベル、日本語がネイティブ → 対象のまま（除外しない）。
+    resume = _resume()
+    resume["languages"] = [
+        {"name": {"ja": "日本語"}, "level": "ネイティブ"},
+        {"name": {"ja": "英語"}, "level": "ビジネスレベル"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
     assert check_eligibility(c).eligible
 
 
