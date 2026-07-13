@@ -111,13 +111,6 @@ class Repository:
         self.conn.commit()
 
     # --- 重複判定 -------------------------------------------------------------
-    def first_already_handled(self, member_no: str) -> bool:
-        """初回が生成済み（=何らかのレコードがある）かどうか。"""
-        row = self.conn.execute(
-            "SELECT 1 FROM scouts WHERE member_no=? AND kind='first'", (member_no,)
-        ).fetchone()
-        return row is not None
-
     def first_sent(self, member_no: str) -> bool:
         """初回が実際に送信済みか。重複送信防止の唯一の基準。
 

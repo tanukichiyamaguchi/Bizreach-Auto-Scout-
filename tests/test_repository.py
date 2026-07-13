@@ -24,8 +24,8 @@ def test_first_sent_only_true_after_send(tmp_path):
     repo.upsert_candidate(cand, check_eligibility(cand))
     repo.record_generated(_scout())
 
-    # 生成直後は未送信
-    assert repo.first_already_handled("BU3765516") is True
+    # 生成直後は未送信（生成済みでも first_sent は False）
+    assert repo.get_scout("BU3765516", "first") is not None
     assert repo.first_sent("BU3765516") is False
 
     repo.mark_sent("BU3765516", "first", 5)

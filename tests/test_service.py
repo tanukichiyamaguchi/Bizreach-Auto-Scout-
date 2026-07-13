@@ -1,7 +1,7 @@
 """常駐サービス（service.run_cycle / service.serve）を検証する。
 
 実ブラウザ・ネットワーク・実認証情報は使わず、ScoutPipeline・run_due_resends・
-BizreachClient・BizreachSender・BizreachSource を monkeypatch で差し替えて検証する。
+BizreachClient・ApiScoutSender・BizreachApiSource を monkeypatch で差し替えて検証する。
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def test_run_cycle_with_search_url_runs_pipeline_and_resends(patched):
     assert result["pipeline"]["processed"] == 3
     assert result["resend"]["sent"] == 4
 
-    # pipeline が1回 run され、BizreachSource に search_url/max が渡る。
+    # pipeline が1回 run され、BizreachApiSource に search_url/max が渡る。
     assert len(FakePipeline.instances) == 1
     assert FakePipeline.instances[0].run_calls[0][1] is True  # send=True
     assert patched["source"][0].search_url == "https://ex.com/search"
