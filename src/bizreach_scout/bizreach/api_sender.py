@@ -14,7 +14,7 @@ from __future__ import annotations
 from ..config import get_settings, scout_job_id
 from ..logging_config import logger
 from ..models import Candidate
-from .sender import SendOutcome
+from .outcome import SendOutcome
 
 
 class ApiScoutSender:
