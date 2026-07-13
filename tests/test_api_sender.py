@@ -12,9 +12,11 @@ class FakeApi:
         self.result = result
         self.calls = []
 
-    def route_scout(self, job_id, mrccid, subject, body, dry_run=True, reminder=None):
+    def route_scout(self, job_id, mrccid, subject, body, dry_run=True, reminder=None,
+                    idempotency_key=None):
         self.calls.append({"job_id": job_id, "mrccid": mrccid,
-                           "dry_run": dry_run, "reminder": reminder})
+                           "dry_run": dry_run, "reminder": reminder,
+                           "idempotency_key": idempotency_key})
         return dict(self.result)
 
 
@@ -68,7 +70,8 @@ class _PickupApi:
     def __init__(self):
         self.calls = []
 
-    def send_pickup_scout(self, job_id, mrccid, subject, body, dry_run=True, reminder=None):
+    def send_pickup_scout(self, job_id, mrccid, subject, body, dry_run=True, reminder=None,
+                          idempotency_key=None):
         self.calls.append(("pickup", mrccid, dry_run))
         return {"status": 201, "endpoint": "pickup"}
 

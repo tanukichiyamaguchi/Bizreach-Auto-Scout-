@@ -243,6 +243,30 @@ def test_run_cycle_catches_exception_and_closes(patched, monkeypatch):
     assert FakeClient.instances[0].closed is True
 
 
+def test_run_cycle_auth_error_returns_auth_marker(patched, monkeypatch):
+    """P1: 認証切れは error='auth' で返し、呼び出し側が exit 非0 にできる。"""
+    from bizreach_scout.bizreach.errors import BizreachAuthError
+
+    def auth_boom(repo, sender, now=None):
+        raise BizreachAuthError("PasswordExpired")
+
+    monkeypatch.setattr(service, "run_due_resends", auth_boom)
+
+    result = service.run_cycle(search_url=None)
+
+    assert result.get("error") == "auth"
+    assert FakeRepository.instances[0].closed is True
+    assert FakeClient.instances[0].closed is True
+
+
+def test_serve_returns_last_cycle_result(monkeypatch):
+    """P1: serve は最後のサイクル結果を返す（CLI が exit code を決められる）。"""
+    monkeypatch.setattr(service, "run_cycle",
+                        lambda **k: {"error": "auth", "detail": "x"})
+    result = service.serve(once=True, interval=999999)
+    assert result == {"error": "auth", "detail": "x"}
+
+
 # --- serve ----------------------------------------------------------------
 
 

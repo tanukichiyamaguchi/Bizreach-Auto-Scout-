@@ -14,12 +14,15 @@ from .factories import make_candidate
 
 
 class FakeSender:
-    def __init__(self, status="sent"):
+    def __init__(self, status="sent", dry_run=False):
         self.status = status
+        self.dry_run = dry_run
         self.sent = []
+        self.idempotency_keys = []
 
-    def send_scout(self, url, subject, body):
+    def send_scout(self, url, subject, body, idempotency_key=None):
         self.sent.append(url)
+        self.idempotency_keys.append(idempotency_key)
         return SimpleNamespace(status=self.status, detail="")
 
 

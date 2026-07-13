@@ -24,6 +24,16 @@ from .logging_config import logger, setup_logging
 from .storage.repository import Repository
 
 
+def _exit_on_total_failure(report) -> None:
+    """処理対象があるのに1件も送れず全て失敗した場合は異常終了する。
+
+    認証切れ・API仕様変更などで「実行成功(緑)なのに送信0件」になる事故を
+    CI/監視で検知できるようにするための安全弁（部分失敗では落とさない）。
+    """
+    if report.processed > 0 and report.sent == 0 and report.failed > 0:
+        raise SystemExit(1)
+
+
 def _build_source(source: str, input_path: str | None, search_url: str | None,
                   max_candidates: int, client=None):
     if source == "csv":
@@ -128,6 +138,7 @@ def run(source: str, input_path: str | None, search_url: str | None,
         pipeline = ScoutPipeline(repo=repo, generator=generator, sender=sender)
         report = pipeline.run(src, send=send and can_send)
         click.echo(report.summary())
+        _exit_on_total_failure(report)
     finally:
         if client:
             client.close()
@@ -166,6 +177,7 @@ def run_pickup(kind: str, max_candidates: int, send: bool, headless: bool) -> No
         pipeline = ScoutPipeline(repo=repo, sender=sender, apply_status_filter=False)
         report = pipeline.run(source, send=send)
         click.echo(report.summary())
+        _exit_on_total_failure(report)
     finally:
         if client:
             client.close()
@@ -193,6 +205,9 @@ def run_resends(send: bool, headless: bool) -> None:
             sender = ApiScoutSender(BizreachApi(client))
         report = run_due_resends(repo, sender)
         click.echo(report.summary())
+        # 対象があるのに1件も送れず全て失敗した場合は異常終了（緑にしない）。
+        if report.due > 0 and report.sent == 0 and report.failed > 0:
+            raise SystemExit(1)
     finally:
         if client:
             client.close()
@@ -465,13 +480,18 @@ def serve(search_url: str | None, interval: int, max_candidates: int,
 
     if get_settings().dry_run:
         click.echo("※ DRY_RUN 有効: 文面は入力しますが実送信は行いません（.env の BIZSCOUT_DRY_RUN）。")
-    _serve(
+    result = _serve(
         search_url=search_url,
         interval=interval,
         max_candidates=max_candidates,
         headless=headless,
         once=once,
     )
+    # 認証切れ等でサイクルが失敗したまま「成功(exit 0)」になるのを防ぐ。
+    # 常駐（--once なし）では途中失敗はログのみで継続するが、最後の結果が
+    # エラーで終わった場合は非0で終了する。
+    if isinstance(result, dict) and result.get("error"):
+        raise SystemExit(1)
 
 
 def main() -> None:

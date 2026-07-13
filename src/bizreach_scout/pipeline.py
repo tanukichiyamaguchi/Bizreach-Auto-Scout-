@@ -88,6 +88,28 @@ class ScoutPipeline:
         # ピックアップ求人は会員ステータス条件を適用しない（False で渡す）。
         self.apply_status_filter = apply_status_filter
 
+    def _guard_state_present(self, send: bool) -> None:
+        """状態DB消失ガード。
+
+        expect_state=true かつ実送信を行う（sender あり・dry_run でない）のに
+        送信済みレコードが1件も無い場合、dedupe用の状態DBが消えた可能性が高い。
+        そのまま進めると全候補者を「初回」として再送信してしまうため中断する。
+        （本当の初回運用時は expect_state=false のままにしておく。）
+        """
+        if not (send and self.sender is not None):
+            return
+        if not self.settings.expect_state:
+            return
+        if getattr(self.sender, "dry_run", self.settings.dry_run):
+            return
+        if not self.repo.has_any_sent():
+            raise RuntimeError(
+                "BIZSCOUT_EXPECT_STATE=true ですが送信履歴(状態DB)が空です。"
+                "actions/cache 失効などで重複防止データが消えた可能性があります。"
+                "全候補者への再送信を防ぐため中断しました。復旧手順は "
+                "docs/GitHub Actionsで運用.md を参照してください。"
+            )
+
     def _send_delay(self) -> None:
         lo = self.settings.send_delay_min
         hi = max(self.settings.send_delay_max, lo)
@@ -115,6 +137,7 @@ class ScoutPipeline:
         1実行あたりの送信上限(max_sends_per_run)を守るために使う。
         """
         report = PipelineReport()
+        self._guard_state_present(send)
         on_ineligible = self.rules.get("eligibility", {}).get("on_ineligible", "skip")
 
         for candidate in source:
@@ -186,7 +209,15 @@ class ScoutPipeline:
 
         # 再送はビズリーチ標準の追客(reminder)で初回送信時に予約（設定で切替可）。
         reminder = self._build_reminder(resend_subject, resend_body)
-        outcome = self.sender.send_scout(candidate, subject, body, reminder=reminder)
+        # 実送信の直前に送信意図と冪等キーを永続化する（write-ahead）。
+        # 「送信成功→mark_sent」の間にクラッシュしても、次回の再試行が同一キーで
+        # 送られるためサーバ側dedupeが効き二重送信にならない。
+        # dry_run では状態遷移を変えない（generated のまま＝従来どおり）。
+        idem_key = None
+        if not getattr(self.sender, "dry_run", self.settings.dry_run):
+            idem_key = self.repo.begin_send(mno, "first")
+        outcome = self.sender.send_scout(candidate, subject, body, reminder=reminder,
+                                         idempotency_key=idem_key)
         if outcome.status == "sent":
             self.repo.mark_sent(mno, "first", self.settings.resend_after_days)
             if reminder:

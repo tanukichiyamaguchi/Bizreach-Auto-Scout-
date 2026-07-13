@@ -59,7 +59,12 @@ def run_due_resends(repo: Repository, sender, now: datetime | None = None) -> Re
             logger.info("再送スキップ(%s): %s", reason, mno)
             continue
 
-        outcome = sender.send_scout(candidate, row["subject"], row["body"])
+        # 実送信直前に冪等キーを永続化（初回と同じ二重送信防止）。dry_run では遷移しない。
+        idem_key = None
+        if not getattr(sender, "dry_run", settings.dry_run):
+            idem_key = repo.begin_send(mno, "resend")
+        outcome = sender.send_scout(candidate, row["subject"], row["body"],
+                                    idempotency_key=idem_key)
         if outcome.status == "sent":
             repo.mark_sent(mno, "resend", settings.resend_after_days)
             report.sent += 1

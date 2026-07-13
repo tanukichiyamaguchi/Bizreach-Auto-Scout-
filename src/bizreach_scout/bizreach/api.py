@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..logging_config import logger
 from ..models import Candidate, Education, Employment, Gender
+from .errors import BizreachAuthError
 
 _GRADE_MAP = {
     "Doctor": Education.doctor,
@@ -234,6 +235,35 @@ class BizreachApi:
         return self.client.page.request
 
     @staticmethod
+    def _raise_on_auth_error(status: int, body: dict | None) -> None:
+        """認証切れを検出したら BizreachAuthError を送出する。
+
+        実例: パスワード期限切れ時に全APIが
+        {'status': 403, 'code': 'Unauthorized', 'reason': 'PasswordExpired'} を返し、
+        従来は warning ログだけで「実行成功・送信0件」の緑になっていた。
+        401、または 403 かつ code=Unauthorized のときのみ発火する
+        （単発の権限系403で全体を落とさないよう保守的に判定）。
+        """
+        if status not in (401, 403):
+            return
+        body = body or {}
+        code = str(body.get("code", ""))
+        if status == 401 or code == "Unauthorized":
+            reason = str(body.get("reason", ""))
+            raise BizreachAuthError(
+                f"ビズリーチ認証エラー status={status} code={code} reason={reason}。"
+                "パスワード期限切れ/セッション失効の可能性があります。"
+            )
+
+    @staticmethod
+    def _safe_json(resp) -> dict | None:
+        try:
+            data = resp.json()
+            return data if isinstance(data, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
     def parse_rrsc(search_url: str) -> str | None:
         """検索URLの rrsc（保存検索ID）を取り出す。"""
         try:
@@ -247,9 +277,12 @@ class BizreachApi:
         try:
             resp = self._req.get(f"{self.base}/api/v2/candidates/searchConditions/{rrsc}")
             if resp.status != 200:
+                self._raise_on_auth_error(resp.status, self._safe_json(resp))
                 logger.warning("検索条件の取得に失敗 status=%s", resp.status)
                 return None
             return resp.json()
+        except BizreachAuthError:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("検索条件の取得で例外: %s", e)
             return None
@@ -279,6 +312,7 @@ class BizreachApi:
         }
         resp = self._req.post(f"{self.base}/api/v2/candidates:search", data=body)
         if resp.status != 200:
+            self._raise_on_auth_error(resp.status, self._safe_json(resp))
             logger.warning("候補者検索に失敗 status=%s page=%s", resp.status, page)
             return {}
         return resp.json()
@@ -317,9 +351,12 @@ class BizreachApi:
         try:
             resp = self._req.get(f"{self.base}/api/v2/candidates/{mrccid}/resume")
             if resp.status != 200:
+                self._raise_on_auth_error(resp.status, self._safe_json(resp))
                 logger.warning("レジュメ取得に失敗 mrccid=%s status=%s", mrccid, resp.status)
                 return None
             return resp.json()
+        except BizreachAuthError:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("レジュメ取得で例外 mrccid=%s: %s", mrccid, e)
             return None
@@ -364,6 +401,8 @@ class BizreachApi:
             out.update(resp.json())
         except Exception:  # noqa: BLE001
             out["text"] = resp.text()[:2000]
+        # 認証切れは恒久エラーとして即座に浮上させる（緑のまま全滅を防ぐ）。
+        self._raise_on_auth_error(out.get("status", 0), out)
         return out
 
     def create_one_time_token(self) -> str | None:
@@ -418,6 +457,8 @@ class BizreachApi:
         try:
             return self._post_json("/api/v2/scouts/checkCandidates",
                                    {"jobId": job_id, "mrccids": mrccids}, {})
+        except BizreachAuthError:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("送信前チェックで例外: %s", e)
             return {"status": 0, "error": str(e)}
@@ -425,9 +466,14 @@ class BizreachApi:
     def send_scout(self, job_id: str, mrccid: str, subject: str, body: str,
                    dry_run: bool = True, search_id: str | None = None,
                    reminder: dict | None = None,
-                   one_time_token: str | None = None) -> dict:
-        """通常スカウトを送信する（POST /api/v2/scouts/candidates・oneTimeToken必要）。"""
-        headers = {"x-idempotency-key": str(uuid.uuid4()),
+                   one_time_token: str | None = None,
+                   idempotency_key: str | None = None) -> dict:
+        """通常スカウトを送信する（POST /api/v2/scouts/candidates・oneTimeToken必要）。
+
+        idempotency_key を呼び出し側（Repository.begin_send）から渡すと、
+        クラッシュ後の再試行が同一キーで送られサーバ側dedupeが効く。
+        """
+        headers = {"x-idempotency-key": idempotency_key or str(uuid.uuid4()),
                    "x-screen-type": self.SCREEN_TYPE_SAVED}
         if search_id:
             headers["x-search-id"] = search_id
@@ -439,6 +485,8 @@ class BizreachApi:
         }
         try:
             out = self._post_json("/api/v2/scouts/candidates", payload, headers)
+        except BizreachAuthError:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("スカウト送信で例外 mrccid=%s: %s", mrccid, e)
             return {"status": 0, "error": str(e)}
@@ -447,9 +495,10 @@ class BizreachApi:
 
     def send_platinum_scout(self, job_id: str, mrccid: str, subject: str, body: str,
                             dry_run: bool = True, search_id: str | None = None,
-                            reminder: dict | None = None) -> dict:
+                            reminder: dict | None = None,
+                            idempotency_key: str | None = None) -> dict:
         """プラチナスカウトを送信する（POST /api/v2/scouts/platinum・単数mrccid・token不要）。"""
-        headers = {"x-idempotency-key": str(uuid.uuid4()),
+        headers = {"x-idempotency-key": idempotency_key or str(uuid.uuid4()),
                    "x-screen-type": self.SCREEN_TYPE_SAVED}
         if search_id:
             headers["x-search-id"] = search_id
@@ -460,6 +509,8 @@ class BizreachApi:
         }
         try:
             out = self._post_json("/api/v2/scouts/platinum", payload, headers)
+        except BizreachAuthError:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("プラチナ送信で例外 mrccid=%s: %s", mrccid, e)
             return {"status": 0, "error": str(e)}
@@ -468,12 +519,13 @@ class BizreachApi:
 
     def send_pickup_scout(self, job_id: str, mrccid: str, subject: str, body: str,
                           dry_run: bool = True, search_id: str | None = None,
-                          reminder: dict | None = None) -> dict:
+                          reminder: dict | None = None,
+                          idempotency_key: str | None = None) -> dict:
         """本日のピックアップ枠でスカウト送信（POST /api/v2/scouts/pickup）。
 
         プラチナ残数を消費しない無料枠。単数mrccid・token不要。プラチナと同じボディ形状。
         """
-        headers = {"x-idempotency-key": str(uuid.uuid4()),
+        headers = {"x-idempotency-key": idempotency_key or str(uuid.uuid4()),
                    "x-screen-type": "daily_pickup_resume_list"}
         if search_id:
             headers["x-search-id"] = search_id
@@ -484,6 +536,8 @@ class BizreachApi:
         }
         try:
             out = self._post_json("/api/v2/scouts/pickup", payload, headers)
+        except BizreachAuthError:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("ピックアップ送信で例外 mrccid=%s: %s", mrccid, e)
             return {"status": 0, "error": str(e)}
@@ -507,7 +561,8 @@ class BizreachApi:
 
     def _platinum_send_guarded(self, job_id: str, mrccid: str, subject: str, body: str,
                                dry_run: bool, search_id: str | None,
-                               reminder: dict | None, label: str = "platinum") -> dict:
+                               reminder: dict | None, label: str = "platinum",
+                               idempotency_key: str | None = None) -> dict:
         """残数ガード付きのプラチナ送信（本送信のみ残数を確認・減算）。"""
         remaining = self.platinum_remaining()
         if not dry_run and remaining is not None and remaining <= 0:
@@ -515,7 +570,8 @@ class BizreachApi:
             return {"status": 0, "skipped": "PlatinumQuotaExhausted",
                     "endpoint": label, "platinum_remaining": 0}
         out = self.send_platinum_scout(job_id, mrccid, subject, body,
-                                       dry_run, search_id, reminder)
+                                       dry_run, search_id, reminder,
+                                       idempotency_key=idempotency_key)
         out["endpoint"] = label
         if not dry_run and self._ok(out) and self._platinum_remaining is not None:
             self._platinum_remaining -= 1
@@ -524,7 +580,8 @@ class BizreachApi:
 
     def route_scout(self, job_id: str, mrccid: str, subject: str, body: str,
                     dry_run: bool = True, search_id: str | None = None,
-                    reminder: dict | None = None) -> dict:
+                    reminder: dict | None = None,
+                    idempotency_key: str | None = None) -> dict:
         """スカウトを送信する（プラチナスカウトが主・両会員種別に対応）。
 
         実運用はプラチナスカウト（/platinum・token不要）で、求人 scout_job_id を使えば
@@ -545,4 +602,5 @@ class BizreachApi:
             return {"status": 0, "skipped": err, "endpoint": "skip"}
 
         return self._platinum_send_guarded(job_id, mrccid, subject, body,
-                                           dry_run, search_id, reminder)
+                                           dry_run, search_id, reminder,
+                                           idempotency_key=idempotency_key)
