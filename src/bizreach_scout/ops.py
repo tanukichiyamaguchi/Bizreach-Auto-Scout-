@@ -238,10 +238,29 @@ def _check_storage_state_dir() -> Check:
     return Check("セッション保存先", "ok", f"セッション保存先へ書き込み可能です: {target}")
 
 
+def _check_scout_rules() -> Check:
+    """scout_rules.yaml が型付きスキーマで検証を通るか点検する。
+
+    タイポ（未知キー）や型不正があれば送信前に fail として検知し、
+    「条件が無言で消える」事故を起動時に潰す。
+    """
+    from .config import scout_rules
+
+    try:
+        rules = scout_rules()
+    except Exception as exc:  # ValidationError 等
+        return Check("scout_rules.yaml", "fail",
+                     f"設定の検証に失敗しました（タイポ/型不正の可能性）: {exc}")
+    n = len(rules.get("eligibility", {}).get("job_changes_exclude", []))
+    return Check("scout_rules.yaml", "ok",
+                 f"設定の検証に成功しました（転職回数ブラケット {n} 件）。")
+
+
 # run_checks() で実行する点検関数の一覧（表示順）。
 _CHECK_FUNCS = (
     _check_anthropic_api_key,
     _check_model,
+    _check_scout_rules,
     _check_bizreach_credentials,
     _check_selectors_override,
     _check_consultants,

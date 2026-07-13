@@ -37,8 +37,7 @@ def _seed_due_resends(repo: Repository, n: int) -> None:
                 first=ScoutContent(subject="【Premium Offer】初回", body="初回"),
                 resend=ScoutContent(subject="【Premium Offer】再送", body="再送"),
                 model="fake",
-            ),
-            resend_after_days=5,
+            )
         )
         # 過去に予定 → 期限到来扱い
         repo.mark_sent(mno, "first", -1)

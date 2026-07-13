@@ -82,9 +82,11 @@ class ScoutPipeline:
     ):
         self.settings = get_settings()
         self.rules = scout_rules()
+        # 再送日数は scout_rules.yaml resend.after_days が単一情報源。
+        self.resend_after_days = int(self.rules.get("resend", {}).get("after_days", 5))
         self.repo = repo or Repository()
         self.generator = generator or ScoutGenerator()
-        self.sender = sender  # BizreachSender or None（None なら生成のみ）
+        self.sender = sender  # ApiScoutSender or None（None なら生成のみ）
         # ピックアップ求人は会員ステータス条件を適用しない（False で渡す）。
         self.apply_status_filter = apply_status_filter
 
@@ -123,7 +125,7 @@ class ScoutPipeline:
         if not (resend_subject and resend_body):
             return None
         return {
-            "daysAfter": _reminder_days_after(self.settings.resend_after_days),
+            "daysAfter": _reminder_days_after(self.resend_after_days),
             "subject": resend_subject,
             "body": resend_body,
         }
@@ -191,7 +193,7 @@ class ScoutPipeline:
                 report.errors.append((mno, f"生成失敗: {e}"))
                 logger.error("文面生成に失敗: %s: %s", mno, e)
                 return
-            self.repo.record_generated(scout, self.settings.resend_after_days)
+            self.repo.record_generated(scout)
             _export_scout(scout)
             report.generated += 1
             subject, body = scout.first.subject, scout.first.body
@@ -219,7 +221,7 @@ class ScoutPipeline:
         outcome = self.sender.send_scout(candidate, subject, body, reminder=reminder,
                                          idempotency_key=idem_key)
         if outcome.status == "sent":
-            self.repo.mark_sent(mno, "first", self.settings.resend_after_days)
+            self.repo.mark_sent(mno, "first", self.resend_after_days)
             if reminder:
                 # ビズリーチ側が5日後に自動追客するため、独自再送は行わない（二重送信防止）。
                 self.repo.mark_skipped(mno, "resend", "native_reminder(ビズリーチ追客で自動送信)")

@@ -88,7 +88,7 @@ def generate(source: str, input_path: str | None, save: bool) -> None:
             from .eligibility import check_eligibility
 
             repo.upsert_candidate(candidate, check_eligibility(candidate))
-            repo.record_generated(scout, get_settings().resend_after_days)
+            repo.record_generated(scout)
             out = Path("data/exports") / f"{candidate.member_no}.md"
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(render_for_human(scout), encoding="utf-8")

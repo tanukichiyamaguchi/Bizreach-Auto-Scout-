@@ -159,6 +159,25 @@ def test_state_guard_allows_dry_run_even_when_db_empty(tmp_path):
         repo.close()
 
 
+def test_resend_after_days_comes_from_rules(tmp_path):
+    """P2: 再送日数は scout_rules.yaml resend.after_days を単一情報源とする。
+
+    reminder の daysAfter 丸め（3/5/10）に after_days が反映されることを確認する。
+    """
+    db = tmp_path / "t.db"
+    gen = FakeGenerator()
+    sender = FakeSender("sent", dry_run=False)
+    repo = Repository(db_path=db)
+    pipe = ScoutPipeline(repo=repo, generator=gen, sender=sender)
+    pipe.settings.max_sends_per_run = 5
+    pipe.resend_after_days = 10  # rules 由来の値を差し替え（=YAMLで10にした場合）
+    cand = [make_candidate(member_no="BU4300001", profile_url="https://ex.com/a")]
+    pipe.run(ListSource(cand), send=True)
+    reminder = sender.sent[0][3]
+    assert reminder["daysAfter"] == "TenDays"  # after_days=10 → TenDays に丸め
+    repo.close()
+
+
 def test_ineligible_skipped(tmp_path):
     gen = FakeGenerator()
     sender = FakeSender("sent")
