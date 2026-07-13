@@ -20,6 +20,21 @@ import re
 _JP_CHAR = re.compile(r"[぀-ゟ゠-ヿ㐀-䶿一-鿿ｦ-ﾝ]")
 # ラテン文字（英語＋アクセント付き＝仏・独・西・葡等）。
 _LATIN_CHAR = re.compile(r"[A-Za-zÀ-ɏ]")
+# 漢字・ひらがな（＝国内校の目印。カタカナは含めない）。
+_KANJI_OR_HIRAGANA = re.compile(r"[぀-ゟ㐀-䶿一-鿿]")
+# カタカナ（全角・半角。長音符ー・中黒・を含む）。
+_KATAKANA = re.compile(r"[゠-ヿｦ-ﾟ]")
+
+# 校名から除いて「核」を取り出す接尾辞（長い順）。核が漢字を含めば国内校とみなす。
+_UNIVERSITY_SUFFIXES = ("大学院大学", "大学院", "大学校", "大学")
+# カタカナ表記だが国内の大学（カタカナ核でも海外と誤判定しないための許可リスト・随時追加可）。
+_DOMESTIC_KATAKANA_SCHOOLS = (
+    "サイバー",
+    "デジタルハリウッド",
+    "ハリウッド",
+    "ビジネス・ブレークスルー",
+    "ビジネスブレークスルー",
+)
 
 # 職務要約・職歴が「ほぼ英語」と見なす閾値。
 _MIN_LATIN_LETTERS = 50  # これ未満は「英語しか書いていない」とは見なさない（誤検知防止）
@@ -86,19 +101,40 @@ def japanese_char_ratio(text: str | None) -> float:
     return jp / total
 
 
+def is_katakana_foreign_school(name: str | None) -> bool:
+    """カタカナ主体の校名（例: "スタンフォード大学"）を海外の大学とみなす。
+
+    校名から「大学／大学院／大学校」を取り除いた**核**が、漢字・ひらがなを含まず
+    カタカナで構成される場合を海外とみなす。国内の大学は核に漢字を持つ
+    （例: "早稲田" "慶應義塾" "立命館アジア太平洋" "ルーテル学院"）ので区別できる。
+    カタカナ表記の国内大学（サイバー大学 等）は許可リストで除外する。
+    """
+    name = (name or "").strip()
+    if not name or any(dom in name for dom in _DOMESTIC_KATAKANA_SCHOOLS):
+        return False
+    core = name
+    for suf in _UNIVERSITY_SUFFIXES:
+        core = core.replace(suf, "")
+    if _KANJI_OR_HIRAGANA.search(core):
+        return False  # 漢字・ひらがなを含む＝国内校
+    return bool(_KATAKANA.search(core))
+
+
 def is_overseas_school_name(ja: str | None, en: str | None) -> bool:
     """学校名が海外（＝日本語表記でない）ものかを判定する。
 
     - ``ja`` が空で ``en`` のみ存在 … 海外（従来シグナル）。
     - ``ja`` がラテン文字のみ（例: "Stanford University"）… 海外。
-    日本語表記（例: "早稲田大学" "スタンフォード大学"）があれば海外と断定しない
-    （カタカナ転記された海外大学は本モジュールの他シグナルで拾う）。
+    - ``ja`` がカタカナ主体（例: "スタンフォード大学"）… 海外（``is_katakana_foreign_school``）。
+    漢字・ひらがなを含む日本語表記（例: "早稲田大学"）があれば海外と断定しない。
     """
     ja = (ja or "").strip()
     en = (en or "").strip()
     if not ja and en:
         return True
-    return bool(ja) and not has_japanese_script(ja)
+    if ja and not has_japanese_script(ja):
+        return True
+    return is_katakana_foreign_school(ja)
 
 
 def _spans(needles: tuple[str, ...], text: str) -> list[tuple[int, int]]:

@@ -167,6 +167,19 @@ def test_overseas_detected_when_ja_name_is_latin_only():
     assert not check_eligibility(c).eligible
 
 
+def test_overseas_detected_for_katakana_university():
+    # カタカナ表記の海外大学（例: スタンフォード大学）も海外として弾く。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "スタンフォード大学", "en": "Stanford University"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is True
+    result = check_eligibility(c)
+    assert not result.eligible
+    assert any("海外の教育機関" in r for r in result.failed)
+
+
 def test_overseas_detected_when_any_education_is_overseas():
     # 最終学歴が国内でも、いずれかの学歴が海外なら「海外の大学卒」として拾う。
     resume = _resume()

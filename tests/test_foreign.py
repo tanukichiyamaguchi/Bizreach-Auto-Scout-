@@ -44,10 +44,26 @@ def test_overseas_when_ja_is_latin_only():
     assert is_overseas_school_name("Stanford University", None)
 
 
-def test_domestic_when_ja_has_japanese_script():
+def test_domestic_when_ja_has_kanji():
     assert not is_overseas_school_name("早稲田大学", "Waseda University")
-    # カタカナ転記の海外大学は「海外」と断定しない（他シグナルで拾う方針）。
-    assert not is_overseas_school_name("スタンフォード大学", "Stanford University")
+    assert not is_overseas_school_name("慶應義塾大学", None)
+
+
+def test_overseas_when_ja_is_katakana_university():
+    # カタカナ表記の海外大学も海外と判定する（核がカタカナのみ）。
+    assert is_overseas_school_name("スタンフォード大学", "Stanford University")
+    assert is_overseas_school_name("ハーバード大学", None)
+    assert is_overseas_school_name("オックスフォード大学", None)
+    assert is_overseas_school_name("ソウル大学校", None)
+
+
+def test_domestic_katakana_university_not_flagged():
+    # 核に漢字を持つ国内校（ルーテル学院・立命館アジア太平洋 等）は海外にしない。
+    assert not is_overseas_school_name("立命館アジア太平洋大学", None)
+    assert not is_overseas_school_name("ルーテル学院大学", None)
+    # カタカナ名の国内大学は許可リストで除外する。
+    assert not is_overseas_school_name("サイバー大学", None)
+    assert not is_overseas_school_name("デジタルハリウッド大学", None)
 
 
 def test_overseas_false_when_both_empty():
