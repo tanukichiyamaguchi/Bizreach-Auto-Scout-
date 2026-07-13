@@ -7,7 +7,7 @@
 
 外国人の判定（3シグナル・詳細は foreign.py）:
 - 海外の大学卒（overseas_education）
-- 外国語がネイティブレベル（語学欄・自己PRの申告）
+- 外国語がネイティブレベル（**語学欄のみ**を対象に判定）
 - 職務要約・職歴がほとんど英語
 """
 
@@ -30,12 +30,6 @@ _EDU_MAP = {
 # キーワード（レジュメには母語・ネイティブ言語のフィールドが無いための代替判定）。
 _JAPANESE_CERT_KEYWORDS_JA = ("日本語能力試験", "日本語検定")
 _JAPANESE_CERT_KEYWORD_EN = "JLPT"
-
-
-def _foreigner_haystack(candidate: Candidate) -> str:
-    """外国人判定に使う全テキスト（自己PR・生プロフィール・語学欄・英語プロフィール）。"""
-    return "\n".join([candidate.summary, candidate.raw_profile,
-                      candidate.languages, candidate.foreign_text])
 
 
 def _has_japanese_proficiency_cert(candidate: Candidate) -> bool:
@@ -95,12 +89,13 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
         failed.append("海外の教育機関（大学）出身のため対象外（外国人の可能性）")
 
     # --- 外国語がネイティブレベル（外国人の可能性）は対象外 ----------------------
-    # ①日本語検定(JLPT等)の保有、②「英語:ネイティブ」等の外国語ネイティブ申告のいずれか。
+    # 判定は**語学（言語）欄のみ**を対象にする（本文全体で「ネイティブ」を拾わない）。
+    # 併せて日本語検定(JLPT等)の保有も非ネイティブの代替シグナルとして扱う。
     if cfg.get("exclude_non_japanese_native", True):
         if _has_japanese_proficiency_cert(candidate):
             failed.append("日本語検定の保有により日本語ネイティブでない可能性があるため対象外")
-        elif has_foreign_native_language(_foreigner_haystack(candidate)):
-            failed.append("外国語がネイティブレベルの申告があるため対象外（外国人の可能性）")
+        elif has_foreign_native_language(candidate.languages):
+            failed.append("語学欄で外国語がネイティブと申告のため対象外（外国人の可能性）")
 
     # --- 職務要約・職歴がほとんど英語（外国人の可能性）は対象外 ------------------
     if cfg.get("exclude_english_resume", True) and is_english_dominant(

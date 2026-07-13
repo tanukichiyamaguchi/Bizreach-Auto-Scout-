@@ -204,7 +204,7 @@ def test_foreign_text_collects_english_fields():
 
 
 def test_full_english_resume_is_ineligible():
-    # 職務要約・職歴が英語のみで書かれた候補者（外国人）は自動送信から除外される。
+    # 職務要約・職歴が英語のみで書かれた候補者（外国人）は③英語優勢で除外される。
     resume = _resume()
     resume["jobSummary"] = {
         "ja": "",
@@ -212,12 +212,24 @@ def test_full_english_resume_is_ineligible():
                "and closing large deals across the APAC region."),
     }
     resume["coreCompetencies"] = [{"ja": "", "en": "New business development and key account management."}]
-    resume["specialInstruction"] = {"ja": "", "en": "Fluent English and native French speaker."}
+    resume["specialInstruction"] = {"ja": "", "en": "Self-motivated professional with strong leadership."}
+    resume["companyExperiences"] = [
+        {
+            "companyName": {"ja": "", "en": "Google LLC"},
+            "positionName": {"ja": "", "en": "Sales Manager"},
+            "period": {"from": {"year": 2018, "month": 4}, "to": None},
+            "companyCareers": [
+                {"name": {"ja": "", "en": "Sales Manager"},
+                 "contents": {"ja": [""], "en": ["Led the enterprise sales team and exceeded targets."]},
+                 "isPresent": True},
+            ],
+        },
+    ]
     c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
     result = check_eligibility(c)
     assert not result.eligible
-    # 英語優勢・外国語ネイティブのいずれか（両方）で外国人として弾かれる。
-    assert any("外国人の可能性" in r for r in result.failed)
+    # ③ 職務要約・職歴がほとんど英語 → 外国人の可能性として除外。
+    assert any("英語" in r and "外国人の可能性" in r for r in result.failed)
 
 
 def test_japanese_resume_with_english_school_name_still_eligible():

@@ -51,16 +51,6 @@ _NATIVE_MARKERS = (
     "mother tongue",
     "first language",
 )
-# 「ネイティブ」だけは言語以外（技術・人物）も指すため、下記の複合語は語学申告とみなさない。
-# 例: ネイティブ広告 / ネイティブアプリ / クラウドネイティブ / ネイティブスタッフ。
-# （英語・中国語等の「母語/母国語/第一言語」は常に言語なので除外対象にしない。）
-_AMBIGUOUS_NATIVE = ("ネイティブ", "ネーティブ", "native")
-_NATIVE_TECH_AFTER = (
-    "アプリ", "広告", "コード", "環境", "実装", "ライブラリ", "モジュール",
-    "機能", "ドライバ", "スタッフ", "社員", "講師", "教師",
-    "app", "application", "ads", "advertising", "code",
-)
-_NATIVE_TECH_BEFORE = ("クラウド", "cloud")
 # 日本語以外の言語名（日本語表記＋英語表記、いずれも小文字）。網羅は完全でないが主要言語を広く含む。
 _FOREIGN_LANGS = (
     "英語", "english",
@@ -163,35 +153,21 @@ def _gap(a: tuple[int, int], b: tuple[int, int]) -> int:
     return max(a[0] - b[1], b[0] - a[1])
 
 
-def _is_language_native(low: str, span: tuple[int, int]) -> bool:
-    """その「ネイティブ表記」が言語（語学）を指すか。技術・人物用語なら False。
-
-    母語/母国語/第一言語などは常に言語。曖昧な「ネイティブ/native」だけ、直後が
-    技術・人物の複合語（ネイティブ広告/アプリ、native app 等）や直前が「クラウド/cloud」の
-    場合を言語以外とみなして除外する（「ネイティブレベル」「ネイティブスピーカー」は言語）。
-    """
-    s, e = span
-    if low[s:e] not in _AMBIGUOUS_NATIVE:
-        return True
-    after = low[e:e + 12].lstrip(" 　")
-    if any(after.startswith(t) for t in _NATIVE_TECH_AFTER):
-        return False
-    before = low[max(0, s - 6):s].rstrip(" 　")
-    return not any(before.endswith(t) for t in _NATIVE_TECH_BEFORE)
-
-
 def has_foreign_native_language(text: str | None) -> bool:
-    """日本語以外の言語を「ネイティブ／母語」と申告しているか。
+    """レジュメの**語学欄テキスト**に、日本語以外の言語を「ネイティブ／母語」と
+    申告しているか。
+
+    ⚠ この関数はレジュメの「語学（言語）」欄の文字列に対してのみ使うこと。
+    職務要約・自己PR・職歴など本文全体に適用してはならない（「ネイティブ広告」等、
+    語学と無関係の「ネイティブ」を誤検出するため）。
 
     「英語：ネイティブ」「native English」「母国語：中国語」等を検出する。各《ネイティブ表記》
     について**最も近い言語トークン**を求め、それが外国語で、かつ近接（``_NATIVE_PROXIMITY``
-    文字以内）である場合のみ True。次のケースは誤検出しない:
-    - 「日本語：ネイティブ / 英語：ビジネスレベル」… 最近接が日本語（英語は非ネイティブ）。
-      ※「英語：ビジネスレベル／日常会話」等は日本人の職務経歴に非常に多く、除外してはならない。
-    - 「ネイティブ広告」「ネイティブアプリ」「クラウドネイティブ」… 言語ではない技術用語。
+    文字以内）である場合のみ True。「日本語：ネイティブ / 英語：ビジネスレベル」は最近接が
+    日本語のため誤検出しない（「英語：ビジネス／日常会話」は日本人に多く除外してはならない）。
     """
     low = (text or "").lower()
-    markers = [mk for mk in _spans(_NATIVE_MARKERS, low) if _is_language_native(low, mk)]
+    markers = _spans(_NATIVE_MARKERS, low)
     if not markers:
         return False
     foreign = _spans(_FOREIGN_LANGS, low)

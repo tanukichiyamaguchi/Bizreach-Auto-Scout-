@@ -134,16 +134,20 @@ def test_exclude_non_japanese_native_can_be_disabled_via_config():
 # --- 外国語がネイティブレベル（外国人の可能性）は対象外 ------------------------
 
 def test_foreign_native_language_in_languages_fails():
+    # 判定は語学欄（languages）のみを対象にする。
     result = check_eligibility(make_candidate(languages="英語（ネイティブ）、日本語（日常会話）"))
     assert not result.eligible
     assert any("外国語がネイティブ" in r for r in result.failed)
 
 
-def test_foreign_native_language_in_foreign_text_fails():
-    # API経路で en 欄に入っていた語学情報（foreign_text）でも検出できる。
-    result = check_eligibility(make_candidate(foreign_text="Native English speaker"))
-    assert not result.eligible
-    assert any("外国語がネイティブ" in r for r in result.failed)
+def test_native_in_body_not_scanned_only_language_field():
+    # 本文（自己PR・職歴）に「ネイティブ」があっても語学欄でなければ判定しない。
+    # 例: マーケの「ネイティブ広告」運用経験。誤って日本人を除外しないこと。
+    result = check_eligibility(
+        make_candidate(languages="日本語：ネイティブ、英語：ビジネス",
+                       summary="ネイティブ広告の運用と英語での海外折衝を担当。")
+    )
+    assert result.eligible
 
 
 def test_japanese_native_english_business_passes():

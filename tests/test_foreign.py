@@ -113,16 +113,6 @@ def test_business_and_conversational_level_not_flagged():
     assert has_foreign_native_language("中国語ネイティブスピーカー")
 
 
-def test_tech_or_person_native_not_flagged():
-    # 「ネイティブ広告」「ネイティブアプリ」「クラウドネイティブ」等の技術・人物用語の
-    # 「ネイティブ」は語学申告ではないため、近くに外国語があっても誤検出しない。
-    assert not has_foreign_native_language("ネイティブ広告の運用経験。英語ドキュメント作成")
-    assert not has_foreign_native_language("ネイティブアプリの英語対応を担当")
-    assert not has_foreign_native_language("クラウドネイティブ環境を構築。英語会議あり")
-    assert not has_foreign_native_language("英語対応のネイティブスタッフを管理")
-    assert not has_foreign_native_language("native app development with English docs")
-
-
 def test_no_language_mention_not_flagged():
     assert not has_foreign_native_language("法人営業として新規開拓を担当。")
     assert not has_foreign_native_language("")
