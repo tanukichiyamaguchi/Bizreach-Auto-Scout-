@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -31,13 +32,17 @@ CREATE TABLE IF NOT EXISTS scouts (
     kind         TEXT NOT NULL,          -- first / resend
     subject      TEXT NOT NULL,
     body         TEXT NOT NULL,
-    status       TEXT NOT NULL,          -- generated / sent / failed / skipped
+    status       TEXT NOT NULL,          -- generated / sending / sent / failed / skipped
     scheduled_at TEXT,                   -- 再送予定時刻
     sent_at      TEXT,
     error        TEXT NOT NULL DEFAULT '',
     model        TEXT NOT NULL DEFAULT '',
     tone_key     TEXT NOT NULL DEFAULT '',
     analysis     TEXT NOT NULL DEFAULT '',
+    -- 送信リクエストの冪等キー（x-idempotency-key）。送信前に永続化し、
+    -- 「送信成功→sent記録」の間にクラッシュしても再試行が同一キーで送られる
+    -- ことでサーバ側dedupeが効き、二重送信を防ぐ。
+    idempotency_key TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
     PRIMARY KEY (member_no, kind)
 );
@@ -59,7 +64,17 @@ class Repository:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """既存DBへの無停止マイグレーション（列が既にあれば何もしない）。"""
+        try:
+            self.conn.execute(
+                "ALTER TABLE scouts ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # duplicate column name = 追加済み
 
     def close(self) -> None:
         self.conn.close()
@@ -149,6 +164,40 @@ class Repository:
         )
         self.conn.commit()
 
+    def begin_send(self, member_no: str, kind: str) -> str:
+        """送信意図を記録し、この送信で使う冪等キーを返す（write-ahead）。
+
+        - 直前の状態が 'sending'（＝送信したか不明のままクラッシュした）場合のみ
+          **同じキー**を再利用する。再試行が同一キーで送信されるため、前回の
+          リクエストが実は成功していてもサーバ側dedupeで二重送信にならない。
+        - 確定失敗(failed)や未送信(generated)からの送信は新しいキーを発行する
+          （確定失敗後の再試行は別リクエストとして扱うのが正しい）。
+        - status を 'sending' にする（'sent' ではないので first_sent() は False の
+          まま＝再試行対象。成功時に mark_sent で確定する）。
+        """
+        row = self.conn.execute(
+            "SELECT status, idempotency_key FROM scouts WHERE member_no=? AND kind=?",
+            (member_no, kind),
+        ).fetchone()
+        if row and row["status"] == "sending" and row["idempotency_key"]:
+            key = row["idempotency_key"]
+        else:
+            key = str(uuid.uuid4())
+        self.conn.execute(
+            "UPDATE scouts SET status='sending', idempotency_key=? "
+            "WHERE member_no=? AND kind=?",
+            (key, member_no, kind),
+        )
+        self.conn.commit()
+        return key
+
+    def has_any_sent(self) -> bool:
+        """送信済みレコードが1件でも存在するか（状態DB消失ガード用）。"""
+        row = self.conn.execute(
+            "SELECT 1 FROM scouts WHERE status='sent' LIMIT 1"
+        ).fetchone()
+        return row is not None
+
     def mark_sent(self, member_no: str, kind: str, resend_after_days: int = 5) -> None:
         now = datetime.now()
         self.conn.execute(
@@ -182,10 +231,12 @@ class Repository:
     # --- 再送スケジュール -----------------------------------------------------
     def due_resends(self, now: datetime | None = None) -> list[sqlite3.Row]:
         now = now or datetime.now()
+        # 'sending' も対象に含める: 送信途中でクラッシュした再送を取り残さない
+        # （begin_send が同一冪等キーを再利用するため二重送信にはならない）。
         return self.conn.execute(
             """
             SELECT * FROM scouts
-            WHERE kind='resend' AND status='generated'
+            WHERE kind='resend' AND status IN ('generated', 'sending')
               AND scheduled_at IS NOT NULL AND scheduled_at <= ?
             ORDER BY scheduled_at ASC
             """,

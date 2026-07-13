@@ -12,6 +12,7 @@ import re
 import signal
 import threading
 
+from .bizreach.errors import BizreachAuthError
 from .config import get_settings
 from .logging_config import logger
 from .pipeline import ScoutPipeline
@@ -103,6 +104,11 @@ def run_cycle(
             "failed": resend_report.failed,
         }
         return result
+    except BizreachAuthError as e:
+        # 認証切れは恒久エラー。呼び出し側が exit 非0 にできるよう種別を明示する
+        # （「成功に見えるのに1件も送れていない」事故を防ぐ）。
+        logger.error("認証エラーでサイクルを中断しました: %s", e)
+        return {"error": "auth", "detail": str(e)}
     except Exception as e:  # noqa: BLE001
         # サイクル単位で握りつぶし、常駐プロセスを継続させる。
         logger.exception("サイクル実行中に例外が発生しました: %s", e)
@@ -120,7 +126,7 @@ def serve(
     headless: bool = True,
     once: bool = False,
     max_cycles: int | None = None,
-) -> None:
+) -> dict:
     """run_cycle を interval 秒ごとに繰り返す常駐ループ。
 
     - once=True なら1サイクルだけ実行して終了する。
@@ -128,6 +134,9 @@ def serve(
     - KeyboardInterrupt / SIGTERM を受けると、進行中サイクル完了後に graceful 終了する。
     - 各サイクルは run_cycle 内で例外隔離されるため、失敗しても次サイクルへ進む。
     - サイクル間の待機はシグナルで即座に中断できる（threading.Event）。
+
+    戻り値は最後に実行したサイクルの結果 dict（`error` キーがあれば失敗）。
+    呼び出し側（CLI）はこれを見て exit code を決められる。
     """
     stop_event = threading.Event()
 
@@ -144,6 +153,7 @@ def serve(
         logger.debug("SIGTERM ハンドラを設定できませんでした（非メインスレッド等）。")
 
     cycle = 0
+    last_result: dict = {}
     logger.info(
         "常駐サービスを開始します（interval=%ds, once=%s, max_cycles=%s）。",
         interval,
@@ -155,15 +165,16 @@ def serve(
             cycle += 1
             logger.info("==== サイクル %d 開始 ====", cycle)
             try:
-                result = run_cycle(
+                last_result = run_cycle(
                     search_url=search_url,
                     max_candidates=max_candidates,
                     headless=headless,
                 )
-                logger.info("サイクル %d 完了: %s", cycle, result)
+                logger.info("サイクル %d 完了: %s", cycle, last_result)
             except Exception as e:  # noqa: BLE001
                 # run_cycle は通常例外を返さないが、二重に保険をかけてループを継続する。
                 logger.exception("サイクル %d で予期しない例外: %s", cycle, e)
+                last_result = {"error": str(e)}
 
             if once or (max_cycles is not None and cycle >= max_cycles):
                 logger.info("停止条件を満たしたため常駐ループを終了します。")
@@ -183,3 +194,4 @@ def serve(
             except (ValueError, OSError):
                 pass
         logger.info("常駐サービスを終了しました（実行サイクル数: %d）。", cycle)
+    return last_result

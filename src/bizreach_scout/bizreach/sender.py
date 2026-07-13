@@ -35,8 +35,11 @@ class BizreachSender:
         return self.settings.kill_switch_path.exists()
 
     def send_scout(self, candidate, subject: str, body: str,
-                   reminder: dict | None = None) -> SendOutcome:
-        # reminder（追客）はDOM操作では未対応のため無視する（API送信側で対応）。
+                   reminder: dict | None = None,
+                   idempotency_key: str | None = None) -> SendOutcome:
+        # reminder（追客）・idempotency_key はDOM操作では未対応のため無視する
+        # （API送信側 ApiScoutSender で対応）。
+        _ = idempotency_key
         if self._kill_switch_active():
             logger.warning("kill switch が有効です。送信を中止します。")
             return SendOutcome("blocked", "kill switch active")

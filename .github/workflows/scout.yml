@@ -131,11 +131,20 @@ jobs:
       # 本日のピックアップ（無料枠・本命）。求人ベース＋候補者ベースの両セクションを処理。
       # 本命なので先に実行し、失敗しても検索スカウトは続行させる（continue-on-error）。
       - name: Run pickup (本日のピックアップ・無料枠・本命)
+        id: pickup
         if: env.RUN_MODE == 'pickup' || github.event_name == 'schedule'
         continue-on-error: true
         run: |
           echo "本日のピックアップ（求人＋候補者）へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX）。"
           bizscout run-pickup --kind both --max "$RUN_MAX"
+
+      # ピックアップは continue-on-error のため job 全体は緑のまま進むが、
+      # 認証切れ等の全滅（exit 非0）は job summary に明示して見落としを防ぐ。
+      - name: Flag pickup failure
+        if: steps.pickup.outcome == 'failure'
+        run: |
+          echo "::warning::本日のピックアップ送信が失敗しました（exit 非0）。ログを確認してください。"
+          echo "⚠️ 本日のピックアップ送信が失敗しました（認証切れ・全件失敗の可能性）。" >> "$GITHUB_STEP_SUMMARY"
 
       # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
       - name: Run scout (検索スカウト＋再送)
@@ -196,5 +205,6 @@ jobs:
           path: |
             logs/
             data/exports/
+            data/bizscout.db
           if-no-files-found: ignore
           retention-days: 14

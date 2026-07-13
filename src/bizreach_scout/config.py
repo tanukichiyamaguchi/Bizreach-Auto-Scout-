@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     send_delay_min: float = 20.0
     send_delay_max: float = 60.0
     kill_switch: str = "data/state/STOP"
+    # true にすると、状態DB(重複防止)が空＝過去の送信履歴が消えている場合に
+    # 実送信を中断する。GitHub Actions の actions/cache 失効でdedupe DBが消え、
+    # 全候補者へ再送信してしまう事故を防ぐための安全弁（本番CIでのみ true 推奨）。
+    expect_state: bool = False
 
     # 再送
     resend_after_days: int = 5

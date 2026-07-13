@@ -26,12 +26,15 @@ class FakeGenerator:
 
 
 class FakeSender:
-    def __init__(self, status="sent"):
+    def __init__(self, status="sent", dry_run=False):
         self.status = status
+        self.dry_run = dry_run
         self.sent = []
+        self.idempotency_keys = []
 
-    def send_scout(self, candidate, subject, body, reminder=None):
+    def send_scout(self, candidate, subject, body, reminder=None, idempotency_key=None):
         self.sent.append((candidate.profile_url, subject, body, reminder))
+        self.idempotency_keys.append(idempotency_key)
         return SimpleNamespace(status=self.status, detail="")
 
 
@@ -82,6 +85,78 @@ def test_cap_then_retry_next_run_does_not_lose_candidate(tmp_path):
 
     # 2件目の文面は2回目で再生成されていない（generate は1回目に各1回のみ）
     assert gen.calls.count("BU1000002") == 1
+
+
+def test_crash_between_send_and_mark_reuses_idempotency_key(tmp_path):
+    """P1: 送信成功→mark_sent の間でクラッシュしても、再試行は同一冪等キーで送る。
+
+    サーバ側dedupe（x-idempotency-key）が効き、二重送信にならない。
+    """
+    db = tmp_path / "t.db"
+    gen = FakeGenerator()
+    sender = FakeSender("sent", dry_run=False)
+
+    # 1回目: mark_sent の直前で擬似クラッシュさせる。
+    repo = Repository(db_path=db)
+    pipe = ScoutPipeline(repo=repo, generator=gen, sender=sender)
+    pipe.settings.max_sends_per_run = 5
+    orig_mark_sent = repo.mark_sent
+    repo.mark_sent = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("crash"))
+    cand = [make_candidate(member_no="BU4100001", profile_url="https://ex.com/4")]
+    try:
+        pipe.run(ListSource(cand), send=True)
+    except RuntimeError:
+        pass
+    repo.mark_sent = orig_mark_sent
+    # 送信はされたが sent 記録前に落ちたので status は 'sending' のまま。
+    assert repo.get_scout("BU4100001", "first")["status"] == "sending"
+    first_key = sender.idempotency_keys[-1]
+    assert first_key  # 冪等キーが送られている
+    repo.close()
+
+    # 2回目: 送信済み扱いにはならず再試行される。冪等キーは1回目と同一。
+    repo2 = Repository(db_path=db)
+    pipe2 = ScoutPipeline(repo=repo2, generator=gen, sender=sender)
+    pipe2.settings.max_sends_per_run = 5
+    report2 = pipe2.run(ListSource(cand), send=True)
+    repo2.close()
+
+    assert report2.sent == 1
+    assert sender.idempotency_keys[-1] == first_key  # 同一キーで再送
+    assert gen.calls.count("BU4100001") == 1  # 文面は再生成しない（再利用）
+
+
+def test_state_guard_blocks_send_when_db_empty(tmp_path):
+    """P1: expect_state=true で状態DBが空なら、実送信を伴う実行を中断する。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    pipe = ScoutPipeline(repo=repo, generator=FakeGenerator(),
+                         sender=FakeSender("sent", dry_run=False))
+    orig = pipe.settings.expect_state
+    pipe.settings.expect_state = True
+    try:
+        cand = [make_candidate(member_no="BU4200001", profile_url="https://ex.com/x")]
+        import pytest
+        with pytest.raises(RuntimeError, match="状態DB"):
+            pipe.run(ListSource(cand), send=True)
+    finally:
+        pipe.settings.expect_state = orig
+        repo.close()
+
+
+def test_state_guard_allows_dry_run_even_when_db_empty(tmp_path):
+    """dry_run はそもそも送信しないのでガード対象外（空DBでも実行できる）。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    pipe = ScoutPipeline(repo=repo, generator=FakeGenerator(),
+                         sender=FakeSender("dry_run", dry_run=True))
+    orig = pipe.settings.expect_state
+    pipe.settings.expect_state = True
+    try:
+        cand = [make_candidate(member_no="BU4200002", profile_url="https://ex.com/y")]
+        report = pipe.run(ListSource(cand), send=True)  # 例外を出さず完了する
+        assert report.dry_run == 1
+    finally:
+        pipe.settings.expect_state = orig
+        repo.close()
 
 
 def test_ineligible_skipped(tmp_path):
