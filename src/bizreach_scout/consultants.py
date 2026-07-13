@@ -64,17 +64,14 @@ def _common_points(candidate: Candidate, c: ConsultantProfile) -> list[str]:
     if company_hits:
         points.append(f"前職企業の共通点（{ '・'.join(c.former_companies) }）")
 
-    if candidate.industry:
-        if _contains_any([candidate.industry], c.industries):
-            points.append(f"業界の共通点（{candidate.industry}）")
+    if candidate.industry and _contains_any([candidate.industry], c.industries):
+        points.append(f"業界の共通点（{candidate.industry}）")
 
-    if candidate.university:
-        if _contains_any([candidate.university], c.universities):
-            points.append(f"出身大学の共通点（{candidate.university}）")
+    if candidate.university and _contains_any([candidate.university], c.universities):
+        points.append(f"出身大学の共通点（{candidate.university}）")
 
-    if candidate.job_function:
-        if _contains_any([candidate.job_function], c.roles):
-            points.append(f"職種・役割の共通点（{candidate.job_function}）")
+    if candidate.job_function and _contains_any([candidate.job_function], c.roles):
+        points.append(f"職種・役割の共通点（{candidate.job_function}）")
 
     return points
 

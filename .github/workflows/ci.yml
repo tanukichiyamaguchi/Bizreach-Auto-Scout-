@@ -34,5 +34,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check src tests
 
+      - name: Type check (mypy)
+        run: mypy src/bizreach_scout
+
       - name: Test (pytest)
+        # カバレッジ基準（--cov-fail-under=55）は pyproject.toml の addopts で強制する。
         run: pytest -q

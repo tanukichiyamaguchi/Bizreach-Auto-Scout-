@@ -26,7 +26,7 @@ dependencies = [
 bizscout = "bizreach_scout.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4.0", "pytest-cov>=4.1.0", "ruff>=0.1.0", "mypy>=1.7.0"]
+dev = ["pytest>=7.4.0", "pytest-cov>=4.1.0", "ruff>=0.1.0", "mypy>=1.7.0", "types-PyYAML>=6.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -34,11 +34,33 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# 現状のカバレッジ実測は約59%。回帰防止として下限を設ける（下回るとCI失敗）。
+# Playwright/ブラウザ操作系（client/probe）はユニットテストが困難なため全体値は低め。
+addopts = "--cov=bizreach_scout --cov-report=term-missing --cov-fail-under=55"
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
-ignore = ["E501"]
+# SIM(単純化) / RUF(ruff独自) を追加。自動修正可能な範囲で品質を底上げする。
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# E501: 行長は line-length で別途管理。
+# RUF001-003: 日本語の全角記号（！（）「」等）を「紛らわしい」と誤検知するため無効化
+#   （本システムの文面は全角が正しく、無効化しないと数千件の誤検知になる）。
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+# Playwright と密結合したブラウザ操作モジュールは動的型が多くノイズになるため、
+# 型チェックの対象から外す（コアのロジックに型検査を集中させる）。
+# これらは probe/送信のDOM操作で page/locator が動的なため mypy の恩恵が小さい。
+[[tool.mypy.overrides]]
+module = [
+    "bizreach_scout.bizreach.client",
+    "bizreach_scout.bizreach.send_probe",
+    "bizreach_scout.bizreach.pickup_probe",
+    "bizreach_scout.ingest.bizreach_pickup_source",
+]
+ignore_errors = true

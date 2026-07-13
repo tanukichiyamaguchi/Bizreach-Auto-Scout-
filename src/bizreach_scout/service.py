@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 import signal
 import threading
@@ -109,7 +110,7 @@ def run_cycle(
         # （「成功に見えるのに1件も送れていない」事故を防ぐ）。
         logger.error("認証エラーでサイクルを中断しました: %s", e)
         return {"error": "auth", "detail": str(e)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # サイクル単位で握りつぶし、常駐プロセスを継続させる。
         logger.exception("サイクル実行中に例外が発生しました: %s", e)
         return {"error": str(e)}
@@ -171,7 +172,7 @@ def serve(
                     headless=headless,
                 )
                 logger.info("サイクル %d 完了: %s", cycle, last_result)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # run_cycle は通常例外を返さないが、二重に保険をかけてループを継続する。
                 logger.exception("サイクル %d で予期しない例外: %s", cycle, e)
                 last_result = {"error": str(e)}
@@ -189,9 +190,7 @@ def serve(
     finally:
         # 元の SIGTERM ハンドラを復元する。
         if previous_handler is not None:
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 signal.signal(signal.SIGTERM, previous_handler)
-            except (ValueError, OSError):
-                pass
         logger.info("常駐サービスを終了しました（実行サイクル数: %d）。", cycle)
     return last_result

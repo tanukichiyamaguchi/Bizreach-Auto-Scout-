@@ -20,7 +20,7 @@
 ```bash
 # 1) 仮想環境と依存関係
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e .                 # もしくは: pip install -r requirements.txt
+pip install -e ".[dev]"          # 実行＋開発（テスト/lint/型）依存をまとめて導入
 playwright install chromium      # ブラウザ自動操作を使う場合のみ
 
 # 2) 環境変数
@@ -76,10 +76,14 @@ bizscout run --source csv --input candidates.csv --no-send   # 生成のみ
 bizscout run-resends        # 期限の到来した再送を送信
 ```
 
-cron 例（毎朝9時）:
+> **本番運用は GitHub Actions（`.github/workflows/scout.yml`）で自動化済み**です。
+> 定期実行は 16:09 / 18:39 JST の2枠で、初回送信・再送をまとめて実行します
+> （詳細は `docs/GitHub Actionsで運用.md`）。以下の cron は自前サーバで運用する場合の参考例です。
+
+自前サーバの cron 例:
 
 ```
-0 9 * * *  cd /path/to/repo && .venv/bin/bizscout run-resends >> logs/resend.log 2>&1
+9 7 * * *  cd /path/to/repo && .venv/bin/bizscout run-resends >> logs/resend.log 2>&1
 ```
 
 ### 4. 完全自動運用（常駐・定期実行）
@@ -185,8 +189,10 @@ cp config/bizreach_selectors.example.yaml config/bizreach_selectors.yaml
 ## テスト
 
 ```bash
-pip install -r requirements-dev.txt
-pytest -q
+pip install -e ".[dev]"   # セットアップ済みなら不要
+pytest -q                 # カバレッジ基準（55%）も同時に検証される
+ruff check src tests      # lint
+mypy src/bizreach_scout   # 型チェック
 ```
 
 ネットワーク不要（Anthropic クライアントはモック）で全ケースが通ります。

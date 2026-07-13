@@ -46,6 +46,19 @@ def _fake_client(input_payload: dict):
     return SimpleNamespace(messages=messages)
 
 
+def test_missing_required_field_raises_generation_error():
+    """P4: emit_scout の必須フィールド欠落は GenerationError（KeyError ではなく）。"""
+    import pytest
+
+    from bizreach_scout.generation.generator import GenerationError
+
+    broken = dict(VALID_INPUT)
+    del broken["greeting_offer"]
+    gen = ScoutGenerator(client=_fake_client(broken), model="test-model")
+    with pytest.raises(GenerationError, match="greeting_offer"):
+        gen.generate(make_candidate(), matches=[])
+
+
 def test_generate_produces_two_messages():
     gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
     scout = gen.generate(make_candidate(), matches=[])

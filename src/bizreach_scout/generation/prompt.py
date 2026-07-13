@@ -155,9 +155,12 @@ def select_tones(candidate: Candidate, rules: dict | None = None) -> list[dict]:
             continue
         if "age_max" in m and candidate.age > m["age_max"]:
             continue
-        if "experience_max" in m and candidate.total_experience_years is not None:
-            if candidate.total_experience_years > m["experience_max"]:
-                continue
+        if (
+            "experience_max" in m
+            and candidate.total_experience_years is not None
+            and candidate.total_experience_years > m["experience_max"]
+        ):
+            continue
         matched.append(p)
     return matched
 
@@ -266,7 +269,7 @@ def _render_resend_rules(rules: dict) -> str:
         rules.get("constraints", {})
         .get("resend_subject_prefix", "【どうしても諦めきれず２度目のご連絡です。】")
     )
-    pct = int(round(ratio * 100))
+    pct = round(ratio * 100)
     return (
         "# 再送本文の制約\n"
         f"- 再送件名(subject_resend)は必ず「{prefix}」で始めること。\n"

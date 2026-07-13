@@ -103,7 +103,7 @@ class CSVSource(CandidateSource):
     def iter_candidates(self) -> Iterator[Candidate]:
         with self.path.open(encoding=self.encoding, newline="") as f:
             reader = csv.DictReader(f)
-            index = _build_index(reader.fieldnames or [])
+            index = _build_index(list(reader.fieldnames or []))
             for row in reader:
                 cand = row_to_candidate(row, index)
                 if cand:
