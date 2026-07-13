@@ -156,6 +156,65 @@ def test_highest_ranked_entry_used_for_overseas_check():
     assert c.overseas_education is True
 
 
+def test_overseas_detected_when_ja_name_is_latin_only():
+    # ja 欄にラテン文字だけ（英語名）が入っているケースも海外の大学とみなす。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "Stanford University", "en": None}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is True
+    assert not check_eligibility(c).eligible
+
+
+def test_overseas_detected_when_any_education_is_overseas():
+    # 最終学歴が国内でも、いずれかの学歴が海外なら「海外の大学卒」として拾う。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Masters", "name": {"ja": "東京大学大学院", "en": None}},
+        {"schoolGrade": "Bachelors", "name": {"ja": None, "en": "University of Oxford"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is True
+
+
+def test_foreign_text_collects_english_fields():
+    # en 欄の職務要約・学歴名が foreign_text に集約される（生成用の summary は日本語のまま）。
+    resume = _resume()
+    resume["jobSummary"] = {"ja": "", "en": "Enterprise sales leader."}
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": None, "en": "Waseda University"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert "Enterprise sales leader." in c.foreign_text
+    assert "Waseda University" in c.foreign_text
+
+
+def test_full_english_resume_is_ineligible():
+    # 職務要約・職歴が英語のみで書かれた候補者（外国人）は自動送信から除外される。
+    resume = _resume()
+    resume["jobSummary"] = {
+        "ja": "",
+        "en": ("Experienced enterprise sales manager with over ten years leading teams "
+               "and closing large deals across the APAC region."),
+    }
+    resume["coreCompetencies"] = [{"ja": "", "en": "New business development and key account management."}]
+    resume["specialInstruction"] = {"ja": "", "en": "Fluent English and native French speaker."}
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    result = check_eligibility(c)
+    assert not result.eligible
+    # 英語優勢・外国語ネイティブのいずれか（両方）で外国人として弾かれる。
+    assert any("外国人の可能性" in r for r in result.failed)
+
+
+def test_japanese_resume_with_english_school_name_still_eligible():
+    # 日本語のレジュメで、学歴の en 名（Waseda University）が foreign_text に入っても、
+    # 本文が日本語主体なら英語優勢とは見なさず対象のまま（誤検出しない）。
+    c = resume_to_candidate(_resume(), now=datetime(2026, 7, 1))
+    assert "Waseda University" in c.foreign_text
+    assert check_eligibility(c).eligible
+
+
 def test_parse_rrsc():
     url = "https://cr-support.jp/scout/highclass/search/?rrsc=3444981"
     assert BizreachApi.parse_rrsc(url) == "3444981"

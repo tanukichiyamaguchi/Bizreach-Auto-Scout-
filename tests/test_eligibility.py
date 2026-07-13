@@ -131,6 +131,65 @@ def test_exclude_non_japanese_native_can_be_disabled_via_config():
     assert not any("日本語検定" in r for r in result.failed)
 
 
+# --- 外国語がネイティブレベル（外国人の可能性）は対象外 ------------------------
+
+def test_foreign_native_language_in_languages_fails():
+    result = check_eligibility(make_candidate(languages="英語（ネイティブ）、日本語（日常会話）"))
+    assert not result.eligible
+    assert any("外国語がネイティブ" in r for r in result.failed)
+
+
+def test_foreign_native_language_in_foreign_text_fails():
+    # API経路で en 欄に入っていた語学情報（foreign_text）でも検出できる。
+    result = check_eligibility(make_candidate(foreign_text="Native English speaker"))
+    assert not result.eligible
+    assert any("外国語がネイティブ" in r for r in result.failed)
+
+
+def test_japanese_native_english_business_passes():
+    # 日本語ネイティブ＋英語ビジネスレベルは対象（誤検出しない）。
+    result = check_eligibility(make_candidate(languages="日本語：ネイティブ / 英語：ビジネスレベル"))
+    assert result.eligible
+
+
+def test_foreign_native_language_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_non_japanese_native": False}}
+    result = check_eligibility(make_candidate(languages="英語（ネイティブ）"), rules=custom)
+    assert not any("外国語がネイティブ" in r for r in result.failed)
+
+
+# --- 職務要約・職歴がほとんど英語（外国人の可能性）は対象外 --------------------
+
+def test_english_dominant_resume_fails():
+    english = ("Experienced enterprise sales manager with more than ten years leading "
+               "teams and closing large deals across the APAC region.")
+    result = check_eligibility(make_candidate(summary=english, raw_profile=""))
+    assert not result.eligible
+    assert any("英語" in r and "対象外" in r for r in result.failed)
+
+
+def test_bilingual_japanese_resume_passes():
+    # 日本語主体＋一部英語（バイリンガル日本人）は対象（英語優勢と見なさない）。
+    mixed = ("グローバル法人営業を担当。English business communication の経験あり。"
+             "新規開拓で全社表彰2回。")
+    result = check_eligibility(make_candidate(summary=mixed))
+    assert result.eligible
+
+
+def test_exclude_english_resume_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    english = ("Experienced enterprise sales manager with more than ten years leading "
+               "teams and closing large deals across the region.")
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_english_resume": False}}
+    result = check_eligibility(make_candidate(summary=english, raw_profile=""), rules=custom)
+    assert not any("英語" in r and "対象外" in r for r in result.failed)
+
+
 def test_unknown_fields_need_confirmation():
     result = check_eligibility(
         make_candidate(age=None, gender=Gender.unknown, education=Education.unknown,

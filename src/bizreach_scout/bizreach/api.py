@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
+from ..foreign import is_overseas_school_name
 from ..logging_config import logger
 from ..models import Candidate, Education, Employment, Gender
 from .errors import BizreachAuthError
@@ -88,6 +89,13 @@ def _ja(node) -> str:
     return (node or "").strip() if isinstance(node, str) else ""
 
 
+def _en(node) -> str:
+    """{"ja": ..., "en": "..."} 形式から英語を取り出す（外国人判定用）。"""
+    if isinstance(node, dict):
+        return (node.get("en") or "").strip()
+    return ""
+
+
 def _years_since(period_from: dict | None, now: datetime | None = None) -> float | None:
     if not period_from or "year" not in period_from:
         return None
@@ -134,11 +142,10 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     edus = resume.get("educations") or []
     if edus:
         best_name = ""
-        best_entry = edus[0]
         for e in edus:
             g = _map_grade(e.get("schoolGrade", ""))
             if g.rank > education.rank:
-                education, best_name, best_entry = g, _ja(e.get("name")), e
+                education, best_name = g, _ja(e.get("name"))
         university = best_name or _ja(edus[0].get("name"))
         # どの学歴レコードも判別できない値のみ可視化（要マッピング追加のサイン）。
         if education is Education.unknown:
@@ -146,12 +153,12 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
             if raws:
                 logger.info("未対応の学歴グレード（要マッピング確認）: %s（mrccid=%s 大学=%s）",
                             raws, mrccid or member_no, _ja(edus[0].get("name")))
-        # 海外教育機関の判定: 最終学歴の学校名に日本語表記(ja)が無く英語表記(en)のみの
-        # 場合を海外教育機関とみなす（学校の所在国フィールドが無いための代替シグナル）。
-        name_node = best_entry.get("name") or {}
-        ja_name = _ja(name_node)
-        en_name = (name_node.get("en") or "").strip() if isinstance(name_node, dict) else ""
-        overseas_education = not ja_name and bool(en_name)
+        # 海外教育機関の判定: いずれかの学歴の学校名が日本語表記でない（ja が空で en のみ、
+        # または ja がラテン文字のみ）場合を海外の大学とみなす。学校の所在国フィールドが
+        # 無いための代替シグナルで、全学歴を対象に「海外の大学卒」を取りこぼさない。
+        overseas_education = any(
+            is_overseas_school_name(_ja(e.get("name")), _en(e.get("name"))) for e in edus
+        )
 
     # --- 職歴 ---
     companies = resume.get("companyExperiences") or []
@@ -196,6 +203,23 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         raw_parts.append("資格: " + "、".join(_ja(q.get("name")) for q in quals))
     raw_profile = "\n\n".join(p for p in raw_parts if p.strip().rstrip(":"))
 
+    # --- 外国人判定用テキスト（生成には使わない）---
+    # 英語で記入された職務要約・自己PR・職歴・学歴名・資格を集める。ja が空で en のみの
+    # レジュメでも「英語優勢／外国語ネイティブ」の判定が効くようにするための材料。
+    foreign_parts: list[str] = [
+        _en(resume.get("jobSummary")),
+        _en(resume.get("specialInstruction")),
+    ]
+    foreign_parts += [_en(cc) for cc in resume.get("coreCompetencies") or []]
+    for ce in companies:
+        foreign_parts.append(_en(ce.get("companyName")))
+        for cc in ce.get("companyCareers", []) or []:
+            en_lines = (cc.get("contents", {}) or {}).get("en") or []
+            foreign_parts.append("\n".join(x for x in en_lines if x))
+    foreign_parts += [_en(e.get("name")) for e in edus]
+    foreign_parts += [_ja(q.get("name")) + " " + _en(q.get("name")) for q in quals]
+    foreign_text = "\n".join(p for p in foreign_parts if p and p.strip())
+
     return Candidate(
         member_no=member_no or mrccid,
         mrccid=mrccid,
@@ -214,6 +238,7 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         salary_desired=_income_label((resume.get("desiredConditions") or {}).get("income")),
         summary=summary,
         raw_profile=raw_profile,
+        foreign_text=foreign_text,
         source="bizreach",
         intention=resume.get("intention") or [],
         resume_updated_status=resume.get("resumeUpdatedStatus") or "",

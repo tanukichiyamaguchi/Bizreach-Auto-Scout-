@@ -86,6 +86,9 @@ class Candidate(BaseModel):
 
     summary: str = ""  # 自己PR・職務要約
     raw_profile: str = ""  # 取得した生テキスト（プロンプトのフォールバックに使用）
+    # 外国人判定専用に収集した英語プロフィール・語学欄テキスト（文面生成には使わない）。
+    # ja が空で en のみのレジュメでも「英語優勢／外国語ネイティブ」判定が効くようにする。
+    foreign_text: str = ""
 
     source: str = "manual"  # bizreach / csv / text / manual
     profile_url: str = ""
