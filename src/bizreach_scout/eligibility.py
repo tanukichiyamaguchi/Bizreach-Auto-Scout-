@@ -1,14 +1,20 @@
 """候補者の対象条件（必須要件）判定。
 
 条件: 27歳〜42歳 / 2.5年以上の同じ会社での勤務歴 / 男性 / 大学・大学院卒業以上 /
-国内の教育機関出身 / 日本語ネイティブ（の可能性が高い）。
+日本人（日本語ネイティブの可能性が高い）。
 いずれかを満たさない（または判定不能）の場合は eligible=False とし、
 完全自動送信からは除外して「要確認」リストへ回す。
+
+外国人の判定（3シグナル・詳細は foreign.py）:
+- 海外の大学卒（overseas_education）
+- 外国語がネイティブレベル（**語学欄のみ**を対象に判定）
+- 職務要約・職歴がほとんど英語
 """
 
 from __future__ import annotations
 
 from .config import scout_rules
+from .foreign import has_foreign_native_language, is_english_dominant
 from .models import Candidate, Education, EligibilityResult, Gender
 
 _EDU_MAP = {
@@ -75,17 +81,27 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
     elif not candidate.education.meets(min_edu):
         failed.append(f"学歴が{min_edu.value}未満（{candidate.education.value}）")
 
-    # --- 学歴（海外の教育機関）は対象外 -----------------------------------------
-    # 最終学歴の学校名に日本語表記が無く英語表記のみの場合を海外教育機関とみなす
-    # （Bizreach APIのレジュメには学校の所在国フィールドが無いための代替シグナル。
-    #  CSV/テキスト取り込みでは判定材料が無いため常に False＝この条件では対象外にしない）。
+    # --- 海外の大学卒（外国人の可能性）は対象外 ---------------------------------
+    # 学校名が日本語表記でない（ja が空で en のみ、または ja がラテン文字のみ）場合を
+    # 海外の大学とみなす（所在国フィールドが無いための代替シグナル。CSV/テキスト取り込みでは
+    # 判定材料が無いため常に False＝この条件では対象外にしない）。
     if cfg.get("exclude_overseas_education", True) and candidate.overseas_education:
-        failed.append("海外の教育機関出身のため対象外")
+        failed.append("海外の教育機関（大学）出身のため対象外（外国人の可能性）")
 
-    # --- 言語（日本語以外がネイティブレベル）は対象外 ----------------------------
-    # 日本語検定（JLPT等）の保有を非ネイティブの代替シグナルとして扱う。
-    if cfg.get("exclude_non_japanese_native", True) and _has_japanese_proficiency_cert(candidate):
-        failed.append("日本語検定の保有により日本語ネイティブでない可能性があるため対象外")
+    # --- 外国語がネイティブレベル（外国人の可能性）は対象外 ----------------------
+    # 判定は**語学（言語）欄のみ**を対象にする（本文全体で「ネイティブ」を拾わない）。
+    # 併せて日本語検定(JLPT等)の保有も非ネイティブの代替シグナルとして扱う。
+    if cfg.get("exclude_non_japanese_native", True):
+        if _has_japanese_proficiency_cert(candidate):
+            failed.append("日本語検定の保有により日本語ネイティブでない可能性があるため対象外")
+        elif has_foreign_native_language(candidate.languages):
+            failed.append("語学欄で外国語がネイティブと申告のため対象外（外国人の可能性）")
+
+    # --- 職務要約・職歴がほとんど英語（外国人の可能性）は対象外 ------------------
+    if cfg.get("exclude_english_resume", True) and is_english_dominant(
+        "\n".join([candidate.summary, candidate.raw_profile, candidate.foreign_text])
+    ):
+        failed.append("職務要約・職歴がほとんど英語で記載のため対象外（外国人の可能性）")
 
     # --- 同一企業での勤続年数 -------------------------------------------------
     min_years = cfg.get("min_same_company_years", 2.5)

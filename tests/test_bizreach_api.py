@@ -8,6 +8,7 @@ from pathlib import Path
 
 from bizreach_scout.bizreach.api import (
     BizreachApi,
+    _extract_languages,
     _income_label,
     _map_grade,
     resume_to_candidate,
@@ -154,6 +155,137 @@ def test_highest_ranked_entry_used_for_overseas_check():
     c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
     assert c.education == Education.master
     assert c.overseas_education is True
+
+
+def test_overseas_detected_when_ja_name_is_latin_only():
+    # ja 欄にラテン文字だけ（英語名）が入っているケースも海外の大学とみなす。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "Stanford University", "en": None}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is True
+    assert not check_eligibility(c).eligible
+
+
+def test_overseas_detected_for_katakana_university():
+    # カタカナ表記の海外大学（例: スタンフォード大学）も海外として弾く。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "スタンフォード大学", "en": "Stanford University"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is True
+    result = check_eligibility(c)
+    assert not result.eligible
+    assert any("海外の教育機関" in r for r in result.failed)
+
+
+def test_overseas_detected_when_any_education_is_overseas():
+    # 最終学歴が国内でも、いずれかの学歴が海外なら「海外の大学卒」として拾う。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Masters", "name": {"ja": "東京大学大学院", "en": None}},
+        {"schoolGrade": "Bachelors", "name": {"ja": None, "en": "University of Oxford"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.overseas_education is True
+
+
+def test_foreign_text_collects_english_fields():
+    # en 欄の職務要約・学歴名が foreign_text に集約される（生成用の summary は日本語のまま）。
+    resume = _resume()
+    resume["jobSummary"] = {"ja": "", "en": "Enterprise sales leader."}
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": None, "en": "Waseda University"}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert "Enterprise sales leader." in c.foreign_text
+    assert "Waseda University" in c.foreign_text
+
+
+def test_full_english_resume_is_ineligible():
+    # 職務要約・職歴が英語のみで書かれた候補者（外国人）は③英語優勢で除外される。
+    resume = _resume()
+    resume["jobSummary"] = {
+        "ja": "",
+        "en": ("Experienced enterprise sales manager with over ten years leading teams "
+               "and closing large deals across the APAC region."),
+    }
+    resume["coreCompetencies"] = [{"ja": "", "en": "New business development and key account management."}]
+    resume["specialInstruction"] = {"ja": "", "en": "Self-motivated professional with strong leadership."}
+    resume["companyExperiences"] = [
+        {
+            "companyName": {"ja": "", "en": "Google LLC"},
+            "positionName": {"ja": "", "en": "Sales Manager"},
+            "period": {"from": {"year": 2018, "month": 4}, "to": None},
+            "companyCareers": [
+                {"name": {"ja": "", "en": "Sales Manager"},
+                 "contents": {"ja": [""], "en": ["Led the enterprise sales team and exceeded targets."]},
+                 "isPresent": True},
+            ],
+        },
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    result = check_eligibility(c)
+    assert not result.eligible
+    # ③ 職務要約・職歴がほとんど英語 → 外国人の可能性として除外。
+    assert any("英語" in r and "外国人の可能性" in r for r in result.failed)
+
+
+def test_japanese_resume_with_english_school_name_still_eligible():
+    # 日本語のレジュメで、学歴の en 名（Waseda University）が foreign_text に入っても、
+    # 本文が日本語主体なら英語優勢とは見なさず対象のまま（誤検出しない）。
+    c = resume_to_candidate(_resume(), now=datetime(2026, 7, 1))
+    assert "Waseda University" in c.foreign_text
+    assert check_eligibility(c).eligible
+
+
+# --- 語学欄の抽出（フィールド名は実データで確定するまで複数候補を試す）------------
+
+def test_extract_languages_from_dict_entries():
+    # {name:{ja/en}, level} 構造（レベルが日本語表記／英語コードのいずれも対応）。
+    r = {"languages": [
+        {"name": {"ja": "英語", "en": "English"}, "level": "ネイティブ"},
+        {"name": {"ja": "日本語"}, "level": "日常会話"},
+    ]}
+    assert _extract_languages(r) == "英語：ネイティブ、日本語：日常会話"
+
+
+def test_extract_languages_alternate_keys():
+    # 別候補のフィールド名・キー（languageSkills / language / proficiency）でも拾う。
+    r = {"languageSkills": [{"language": {"ja": "中国語"}, "proficiency": "Native"}]}
+    assert _extract_languages(r) == "中国語：Native"
+
+
+def test_extract_languages_string_form_and_absent():
+    assert _extract_languages({"languages": "英語（ネイティブ）"}) == "英語（ネイティブ）"
+    assert _extract_languages({"foo": 1}) == ""  # 語学欄なし
+
+
+def test_resume_with_native_foreign_language_is_ineligible():
+    # 語学欄で外国語がネイティブ → 外国人として除外（本文は日本語のまま）。
+    resume = _resume()
+    resume["languages"] = [
+        {"name": {"ja": "日本語"}, "level": "日常会話"},
+        {"name": {"ja": "英語"}, "level": "ネイティブ"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert "英語：ネイティブ" in c.languages
+    result = check_eligibility(c)
+    assert not result.eligible
+    assert any("語学欄で外国語がネイティブ" in r for r in result.failed)
+
+
+def test_resume_with_business_foreign_language_is_eligible():
+    # 語学欄で外国語がビジネスレベル、日本語がネイティブ → 対象のまま（除外しない）。
+    resume = _resume()
+    resume["languages"] = [
+        {"name": {"ja": "日本語"}, "level": "ネイティブ"},
+        {"name": {"ja": "英語"}, "level": "ビジネスレベル"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert check_eligibility(c).eligible
 
 
 def test_parse_rrsc():
