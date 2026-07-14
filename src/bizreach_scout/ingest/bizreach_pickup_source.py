@@ -34,9 +34,10 @@ class BizreachPickupSource(CandidateSource):
         if self.kind == "candidate":
             return ["pick-up-candidate"]
         if self.kind == "both":
-            # pick-up-* 全セクション（本日のピックアップ求人／候補者ほか）を網羅。
-            # 候補者セクションの data-itemid 接尾辞に依存せず確実に拾うための catch-all。
-            return ["pick-up-"]
+            # pick-up-* 全セクションを網羅しつつ、本命の「ピックアップ求人」を最優先で
+            # 処理する（万一 max_candidates で切り詰められても本命が落ちないように）。
+            # 末尾の catch-all で未知の pick-up-* セクションも漏らさない（重複は除去される）。
+            return ["pick-up-job", "pick-up-candidate", "pick-up-"]
         return ["pick-up-job"]  # 既定は本命のピックアップ求人
 
     def iter_candidates(self) -> Iterator[Candidate]:
@@ -60,7 +61,7 @@ class BizreachPickupSource(CandidateSource):
             resume_ids = self._collect_resume_ids(page)
             logger.info("ピックアップ(%s) 未送信の対象: %d件", self.kind, len(resume_ids))
 
-            for rid in resume_ids[: self.max_candidates]:
+            for rid in self._limit_ids(resume_ids):
                 mrccid = self._resolve_mrccid(page, rid)
                 if not mrccid:
                     logger.info("mrccid取得失敗 resume-id=%s（スキップ）", rid)
@@ -74,6 +75,21 @@ class BizreachPickupSource(CandidateSource):
         finally:
             if owns:
                 client.close()
+
+    def _limit_ids(self, ids: list[str]) -> list[str]:
+        """処理上限を適用する。切り捨てが起きる場合は必ず警告を出す（黙殺しない）。
+
+        黙って切り捨てると「レジュメ未開封（既読が付かない）」対象が出る。実際に
+        12件中10件処理で、後方にあった本命のピックアップ求人2名が未開封のまま
+        残った事故があった（2026-07-14）。上限は余裕を持たせ、超過時はログで気づけるようにする。
+        """
+        if len(ids) > self.max_candidates:
+            logger.warning(
+                "ピックアップ対象 %d件 が処理上限(--max %d)を超過。今回 %d件は開封されません。"
+                "上限を見直してください（例: workflow の BIZSCOUT_PICKUP_MAX）。",
+                len(ids), self.max_candidates, len(ids) - self.max_candidates,
+            )
+        return ids[: self.max_candidates]
 
     def _collect_resume_ids(self, page) -> list[str]:
         """対象セクションの freescout から未送信(SCOUTED以外)の resume-id を集める。"""

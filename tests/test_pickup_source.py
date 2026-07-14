@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 from bizreach_scout.ingest.bizreach_pickup_source import _MRCCID_RE, BizreachPickupSource
+
+_PREFIX_RE = re.compile(r'\^="([^"]+)"')
 
 
 class FakeEl:
@@ -55,7 +58,13 @@ class FakePage:
         if "jsi_lap_url_copy" in sel:
             return FakeLoc([{"data-clipboard-text": self.copy_text}])
         if "a.freescout" in sel:
-            return FakeLoc(self.freescout_rows)
+            # data-itemid^="prefix" のプレフィックスでセクションを絞る（実DOMと同じ挙動）。
+            # data-itemid を持たない行は従来テストとの互換のため常にマッチ扱い。
+            m = _PREFIX_RE.search(sel)
+            prefix = m.group(1) if m else ""
+            rows = [r for r in self.freescout_rows
+                    if r.get("data-itemid") is None or r["data-itemid"].startswith(prefix)]
+            return FakeLoc(rows)
         return FakeLoc([])  # close-lightbox 用は空
 
 
@@ -93,9 +102,45 @@ def test_resolve_mrccid_none_when_no_copy_url():
 
 def test_default_kind_is_pickup_job():
     assert BizreachPickupSource()._prefixes() == ["pick-up-job"]
-    # both は pick-up-* 全セクションを catch-all で網羅（候補者セクションも確実に拾う）。
-    assert BizreachPickupSource(kind="both")._prefixes() == ["pick-up-"]
+    # both は本命の「ピックアップ求人」を最優先で処理しつつ catch-all で全セクション網羅。
+    assert BizreachPickupSource(kind="both")._prefixes() == [
+        "pick-up-job", "pick-up-candidate", "pick-up-",
+    ]
     assert BizreachPickupSource(kind="candidate")._prefixes() == ["pick-up-candidate"]
+
+
+def test_both_prioritizes_pickup_job_sections():
+    """both では、DOM上で候補者セクションが先にあっても求人ピックアップを先に処理する。
+
+    2026-07-14 の実運用で、処理上限により後方の求人ピックアップ2名が未開封のまま
+    残ったため、上限に達しても本命（求人）が最初に処理される順序を保証する。
+    """
+    rows = [
+        {"data-itemid": "pick-up-candidate:100", "data-resume-id": "c1", "data-scount-status": ""},
+        {"data-itemid": "pick-up-candidate:101", "data-resume-id": "c2", "data-scount-status": ""},
+        {"data-itemid": "pick-up-job:200", "data-resume-id": "j1", "data-scount-status": ""},
+        {"data-itemid": "pick-up-job:201", "data-resume-id": "j2", "data-scount-status": ""},
+    ]
+    src = BizreachPickupSource(kind="both")
+    ids = src._collect_resume_ids(FakePage(rows))
+    assert ids == ["j1", "j2", "c1", "c2"]  # 求人が先（catch-all 分は重複除去）
+
+
+def test_limit_ids_warns_on_truncation(caplog):
+    """処理上限で切り捨てる場合は必ず警告を出す（黙って未開封のまま残さない）。"""
+    src = BizreachPickupSource(max_candidates=2, kind="both")
+    with caplog.at_level("WARNING"):
+        out = src._limit_ids(["a", "b", "c", "d"])
+    assert out == ["a", "b"]
+    assert any("超過" in r.message and "開封されません" in r.message for r in caplog.records)
+
+
+def test_limit_ids_no_warning_when_within_limit(caplog):
+    src = BizreachPickupSource(max_candidates=10, kind="both")
+    with caplog.at_level("WARNING"):
+        out = src._limit_ids(["a", "b"])
+    assert out == ["a", "b"]
+    assert not caplog.records
 
 
 class _ClosePage:
