@@ -111,6 +111,7 @@ _LANG_LEVEL_KEYS = ("level", "proficiency", "languageLevel", "skillLevel", "grad
 # 語学欄フィールド名を実データから特定するための調査ログ（各1回だけ出す）。
 _logged_resume_keys = False
 _logged_language_field = False
+_logged_language_raw = False
 
 
 def _lang_field(item: dict, keys: tuple[str, ...]) -> str:
@@ -124,11 +125,11 @@ def _lang_field(item: dict, keys: tuple[str, ...]) -> str:
 def _extract_languages(resume: dict) -> str:
     """レジュメの語学欄を「言語名：レベル」形式の文字列に変換する。
 
-    語学欄のフィールド名が実データで未確定のため、複数の候補キーを順に試す。
-    フィールド名特定のため、レジュメのトップレベルのキー一覧と、検出した語学欄を
-    それぞれ1回だけログ出力する（キー名・語学欄のみで、氏名等の個人情報は含まない）。
+    実データでフィールド名は languageSkills と確認済み（2026-07-14 実行ログ）。内部構造は
+    未確定のため複数の候補キーを試し、構造が想定と異なり抽出できなかった場合は、
+    生の構造を1回だけログに出して次回の修正材料にする（語学情報のみで氏名等は含まない）。
     """
-    global _logged_resume_keys, _logged_language_field
+    global _logged_resume_keys, _logged_language_field, _logged_language_raw
     if not _logged_resume_keys:
         logger.info("レジュメのトップレベルキー（語学欄フィールド特定用）: %s", sorted(resume.keys()))
         _logged_resume_keys = True
@@ -153,6 +154,16 @@ def _extract_languages(resume: dict) -> str:
                 logger.info("語学欄フィールドを検出: '%s' → %s", key, text[:200])
                 _logged_language_field = True
             return text
+        if val and not _logged_language_raw:
+            # フィールドは存在するのに想定構造で抽出できなかった。生構造を1回だけ出す
+            # （語学欄と履歴書言語のみ。次回このログを見て _LANG_*_KEYS を確定させる）。
+            try:
+                raw = json.dumps(val, ensure_ascii=False)[:600]
+            except (TypeError, ValueError):
+                raw = repr(val)[:600]
+            logger.info("語学欄 '%s' は存在するが未対応の構造: %s / resumeLanguage=%r",
+                        key, raw, resume.get("resumeLanguage"))
+            _logged_language_raw = True
     return ""
 
 

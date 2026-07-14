@@ -70,6 +70,7 @@ class ScoutPipeline:
         generator: ScoutGenerator | None = None,
         sender=None,
         apply_status_filter: bool = True,
+        max_sends: int | None = None,
     ):
         self.settings = get_settings()
         self.rules = scout_rules()
@@ -80,6 +81,16 @@ class ScoutPipeline:
         self.sender = sender  # ApiScoutSender or None（None なら生成のみ）
         # ピックアップ求人は会員ステータス条件を適用しない（False で渡す）。
         self.apply_status_filter = apply_status_filter
+        # 1実行あたりの送信上限の上書き。None なら設定（BIZSCOUT_MAX_SENDS_PER_RUN）に従う。
+        # ピックアップ（無料枠・残数消費なし）は検索スカウトと別の上限を渡せる。
+        self._max_sends_override = max_sends
+
+    @property
+    def max_sends(self) -> int:
+        """この実行の送信上限（明示指定があればそれ、無ければ設定値）。"""
+        if self._max_sends_override is not None:
+            return self._max_sends_override
+        return self.settings.max_sends_per_run
 
     def _guard_state_present(self, send: bool) -> None:
         """状態DB消失ガード。
@@ -194,9 +205,9 @@ class ScoutPipeline:
         # --- 初回送信 ---
         if not (send and self.sender is not None):
             return
-        if (sent_offset + report.sent + report.dry_run) >= self.settings.max_sends_per_run:
+        if (sent_offset + report.sent + report.dry_run) >= self.max_sends:
             logger.info("1回あたりの送信上限(%d)に達したため送信スキップ: %s",
-                        self.settings.max_sends_per_run, mno)
+                        self.max_sends, mno)
             self.repo.mark_skipped(mno, "first", "max_sends_per_run reached")
             return
 

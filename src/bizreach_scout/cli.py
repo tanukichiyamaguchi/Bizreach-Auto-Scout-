@@ -187,7 +187,10 @@ def run_pickup(kind: str, max_candidates: int, send: bool, headless: bool) -> No
             sender = ApiScoutSender(BizreachApi(client), pickup=True) if send else None
             source = BizreachPickupSource(max_candidates=max_candidates, kind=kind, client=client)
             # ピックアップは会員ステータス条件を適用しない（ユーザー指定・本命リストのため）。
-            pipeline = ScoutPipeline(repo=repo, sender=sender, apply_status_filter=False)
+            # 送信は無料枠（プラチナ残数を消費しない）ため、検索スカウトの送信上限
+            # （BIZSCOUT_MAX_SENDS_PER_RUN）とは切り分け、処理件数(--max)ぶんまで送信できる。
+            pipeline = ScoutPipeline(repo=repo, sender=sender, apply_status_filter=False,
+                                     max_sends=max_candidates)
             report = pipeline.run(source, send=send)
             click.echo(report.summary())
             _exit_on_total_failure(report)
