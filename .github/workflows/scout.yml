@@ -138,7 +138,8 @@ jobs:
           # ピックアップは「本日の全対象を必ず開封（既読化）する」ため、検索スカウトの
           # RUN_MAX とは別の余裕ある上限を使う。実際に RUN_MAX=10 で 12件中2件
           # （本命のピックアップ求人2名）が未開封のまま残った事故の再発防止。
-          # 実送信数は BIZSCOUT_MAX_SENDS_PER_RUN が引き続き制限する。
+          # 送信は無料枠（プラチナ残数を消費しない）のため、検索スカウトの送信上限
+          # BIZSCOUT_MAX_SENDS_PER_RUN とも切り分け、対象条件を満たす全員へ送信する。
           PICKUP_MAX: ${{ vars.BIZSCOUT_PICKUP_MAX || '50' }}
         run: |
           echo "本日のピックアップ（求人＋候補者）へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$PICKUP_MAX）。"

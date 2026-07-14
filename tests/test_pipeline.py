@@ -177,6 +177,38 @@ def test_resend_after_days_comes_from_rules(tmp_path):
     repo.close()
 
 
+def test_max_sends_override_decouples_pickup_from_settings(tmp_path):
+    """ピックアップ用: max_sends 指定は settings.max_sends_per_run より優先される。
+
+    ピックアップ送信は無料枠のため、検索スカウトの送信上限(BIZSCOUT_MAX_SENDS_PER_RUN)
+    に縛られず、処理対象ぶんまで送信できる（run-pickup は max_sends=--max を渡す）。
+    """
+    gen = FakeGenerator()
+    sender = FakeSender("sent")
+    repo = Repository(db_path=tmp_path / "t.db")
+    pipe = ScoutPipeline(repo=repo, generator=gen, sender=sender, max_sends=5)
+    pipe.settings.max_sends_per_run = 1  # 検索スカウト用の上限が 1 でも…
+    try:
+        report = pipe.run(ListSource(_candidates()), send=True)
+    finally:
+        pipe.settings.max_sends_per_run = 20  # シングルトンを元へ
+    repo.close()
+    assert report.sent == 2  # …ピックアップは max_sends=5 に従い全員へ送信
+
+
+def test_max_sends_defaults_to_settings(tmp_path):
+    """max_sends 未指定なら従来どおり settings.max_sends_per_run に従う。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    pipe = ScoutPipeline(repo=repo, generator=FakeGenerator(), sender=FakeSender("sent"))
+    pipe.settings.max_sends_per_run = 1
+    try:
+        report = pipe.run(ListSource(_candidates()), send=True)
+    finally:
+        pipe.settings.max_sends_per_run = 20
+    repo.close()
+    assert report.sent == 1  # 上限1で打ち切り
+
+
 def test_ineligible_skipped(tmp_path):
     gen = FakeGenerator()
     sender = FakeSender("sent")
