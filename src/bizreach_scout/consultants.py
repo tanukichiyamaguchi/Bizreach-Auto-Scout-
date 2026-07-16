@@ -112,39 +112,126 @@ def match_consultants(
     )
 
 
+def _label_for(m: ConsultantMatch) -> str:
+    """プロンプト用のマッチ根拠ラベル（共通点／近い経歴／紹介）。"""
+    if m.category in ("recruit", "insurance", "general"):
+        return "共通点"
+    if m.category == "soft":
+        return "近い経歴"
+    return "紹介理由"  # fallback
+
+
 def render_matches_block(matches: list[ConsultantMatch]) -> str:
-    """プロンプトに差し込むコンサルタント共通点ブロックを生成。
+    """プロンプトに差し込むコンサルタント一覧ブロックを生成。
 
     consultant_id は emit_scout の consultant_intros[].consultant_id で
-    紐付けるための内部識別子（本文には出さない）。
+    紐付けるための内部識別子（本文には出さない）。共通点マッチ・近い経歴（soft）・
+    フォールバックを区別してラベル付けし、モデルが根拠に応じた自然な紹介文を
+    書けるようにする（fallback は共通点を断定せず「当社のコンサルタント」として紹介）。
     """
     if not matches:
-        return "（共通点のある在籍コンサルタントは特定されていません。無理に言及しないこと。）"
+        return "（在籍コンサルタントの情報が取得できませんでした。）"
     lines = []
     for m in matches:
         c = m.consultant
         lines.append(
             f"- consultant_id: {c.id}｜氏名: {c.display_name}｜"
-            f"共通点: {'、'.join(m.common_points)}｜紹介URL: {c.profile_url}"
+            f"{_label_for(m)}: {'、'.join(m.common_points)}｜紹介URL: {c.profile_url}"
         )
     return "\n".join(lines)
 
 
-def select_intro_matches(
-    matches: list[ConsultantMatch], rules: dict | None = None
-) -> list[ConsultantMatch]:
-    """本文で紹介するコンサルタントを、match_consultants の優先順位のまま上位N名に絞る。
+def _soft_points(candidate: Candidate, c: ConsultantProfile) -> list[str]:
+    """共通点マッチが無い候補者向けの「近い経歴」ソフト一致を返す（誇張しない範囲で）。
 
-    候補者によっては共通点のあるコンサルタントが10名以上になることがあり、全員を
-    自然な文章で紹介するのは非現実的（＝紹介の省略や視認性低下の一因だった）。
-    matching.max_intro_consultants（既定3）で上限を設け、現実的なタスクにする。
-    0 を指定した場合は紹介を行わない（resend.max_consultant_mentions と同じ
-    「0=なし」の意味に統一。以前は 0/負値で「無制限」扱いだったが、運用者が
-    誤って機能オフのつもりで 0 を設定すると全員紹介が復活してしまうため廃止した）。
+    職種（現職役職含む）・業界の近さを、コンサルタントの roles/specialties/industries と
+    照合する。断定的な「共通点」ではなく、自然に紹介へつなげるための素材。
+    """
+    pts: list[str] = []
+    if _contains_any([candidate.job_function, candidate.current_title],
+                     c.roles + c.specialties):
+        pts.append(f"職種の近さ（{candidate.job_function or candidate.current_title}）")
+    if candidate.industry and _contains_any([candidate.industry], c.industries + c.specialties):
+        pts.append(f"業界での近い経歴（{candidate.industry}）")
+    return pts
+
+
+def _fallback_point(c: ConsultantProfile) -> str:
+    """共通点も近い経歴も無い場合の、コンサルタント本人の専門に基づく紹介理由（事実ベース）。"""
+    spec = "・".join((c.specialties or c.roles)[:2])
+    return f"当社で活躍するコンサルタント（{spec}）" if spec else "当社で活躍するコンサルタント"
+
+
+def default_blurb(m: ConsultantMatch) -> str:
+    """モデルが blurb を出さなかった場合の、プロフィール由来の事実ベース紹介文。
+
+    最終メールに必ずコンサルタント紹介を載せるための保険。候補者との共通点を
+    断定せず、コンサルタント本人の専門・経歴のみを述べる（consultants.json 由来）。
+    """
+    c = m.consultant
+    spec = "・".join((c.specialties or c.roles)[:3])
+    if spec:
+        return f"{c.display_name}は{spec}などの経験を持つ、当社で活躍するコンサルタントです。"
+    return f"{c.display_name}は当社で活躍するコンサルタントです。"
+
+
+def select_intro_matches(
+    candidate: Candidate,
+    matches: list[ConsultantMatch],
+    rules: dict | None = None,
+    consultants: list[ConsultantProfile] | None = None,
+) -> list[ConsultantMatch]:
+    """本文で必ず紹介するコンサルタントを選ぶ（全メールに最低 min 名を保証する）。
+
+    最重要方針: **スカウトには必ずコンサルタント紹介を載せる**。共通点マッチが少ない/
+    無い候補者でも、①共通点マッチ → ②近い経歴（職種・業界）のソフトマッチ →
+    ③フォールバック（当社の実力派コンサルタント）の順で min〜max 名を確保する。
+
+    - matching.max_intro_consultants（既定3）: 紹介の上限。
+    - matching.min_intro_consultants（既定1）: 紹介の下限（保証人数）。
+    - max_intro_consultants=0 のときのみ紹介を完全に無効化する（min も無視）。
     """
     cfg = (rules or scout_rules()).get("matching", {})
     max_n = max(0, cfg.get("max_intro_consultants", 3))
-    return list(matches[:max_n])
+    if max_n == 0:
+        return []  # 明示的に紹介オフ
+    min_n = min(max(0, cfg.get("min_intro_consultants", 1)), max_n)
+
+    selected = list(matches[:max_n])  # ① 共通点マッチ（優先度順・上位max_n名）
+    if len(selected) >= min_n:
+        return selected  # 既に保証人数を満たす（従来どおりの挙動）
+
+    # 保証人数(min_n)に満たない場合のみ、下記で min_n まで補充する。
+    ids = {m.consultant.id for m in selected}
+    pool = consultants if consultants is not None else load_consultants()
+
+    # ② 近い経歴（ソフトマッチ）を関連度（一致数）の高い順に補充。
+    soft: list[tuple[int, ConsultantMatch]] = []
+    for c in pool:
+        if c.id in ids:
+            continue
+        pts = _soft_points(candidate, c)
+        if pts:
+            soft.append((len(pts), ConsultantMatch(
+                consultant=c, common_points=pts, category="soft")))
+    soft.sort(key=lambda t: -t[0])  # 一致数の多い順（安定＝カタログ順を保持）
+    for _, m in soft:
+        if len(selected) >= min_n:
+            break
+        selected.append(m)
+        ids.add(m.consultant.id)
+
+    # ③ それでも下限に満たなければフォールバック（当社の実力派コンサルタント）で保証。
+    for c in pool:
+        if len(selected) >= min_n:
+            break
+        if c.id in ids:
+            continue
+        selected.append(ConsultantMatch(
+            consultant=c, common_points=[_fallback_point(c)], category="fallback"))
+        ids.add(c.id)
+
+    return selected
 
 
 def _strip_duplicate_heading(blurb: str, name: str, url: str) -> str:
@@ -165,7 +252,8 @@ def _strip_duplicate_heading(blurb: str, name: str, url: str) -> str:
 
 
 def render_consultant_intro_section(
-    lead: str, blurbs: dict[str, str], matches: list[ConsultantMatch]
+    lead: str, blurbs: dict[str, str], matches: list[ConsultantMatch],
+    fill_missing: bool = True,
 ) -> str:
     """モデルが生成した導入文＋コンサルタントごとの紹介文を固定書式で組み立てる。
 
@@ -174,9 +262,12 @@ def render_consultant_intro_section(
         ▼{display_name} プロフィール
         {profile_url}
     先頭のブロックのみ、導入文(lead)に自然につながる形で同じ段落として続ける。
-    2人目以降は空行で区切った独立ブロックにする。blurb が空/未提供のコンサルタントは
-    紹介ブロックごとスキップする。blurb 内に▼見出しやURLが紛れ込んでいても
-    重複表示にならないよう除去する（_strip_duplicate_heading）。
+    2人目以降は空行で区切った独立ブロックにする。blurb 内に▼見出しやURLが紛れ込んで
+    いても重複表示にならないよう除去する（_strip_duplicate_heading）。
+
+    fill_missing=True（既定）のとき、モデルが blurb を出さなかった matches には
+    プロフィール由来の既定紹介文（default_blurb）を補い、**必ず紹介ブロックを出す**。
+    これにより「コンサルタント紹介が本文から丸ごと消える」事故を防ぐ（最重要指示の担保）。
 
     blurbs のキーは呼び出し側の正規化有無によらず一致するよう、この関数内で
     normalize_consultant_id により再正規化する（モデルが 'Inoue' のように
@@ -186,9 +277,11 @@ def render_consultant_intro_section(
     blocks: list[tuple[str, str, str]] = []
     for m in matches:
         blurb = (normalized_blurbs.get(normalize_consultant_id(m.consultant.id)) or "").strip()
-        if not blurb:
-            continue
-        blurb = _strip_duplicate_heading(blurb, m.consultant.display_name, m.consultant.profile_url)
+        if blurb:
+            blurb = _strip_duplicate_heading(
+                blurb, m.consultant.display_name, m.consultant.profile_url)
+        if not blurb and fill_missing:
+            blurb = default_blurb(m)  # 保険: モデルが書かなくても既定文で必ず紹介する
         if not blurb:
             continue
         blocks.append((m.consultant.display_name, blurb, m.consultant.profile_url))
