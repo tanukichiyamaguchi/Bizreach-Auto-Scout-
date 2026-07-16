@@ -119,6 +119,18 @@ def test_select_intro_matches_guarantees_min_when_no_common_ground():
     assert intro[0].category in ("soft", "fallback")
 
 
+def test_select_intro_matches_warns_when_pool_empty(caplog):
+    # コンサルタントデータが空だと保証を満たせない → 黙殺せず警告を出す（事故検知）。
+    cand = make_candidate(prior_companies=["無関係"], industry="製造", job_function="製造")
+    with caplog.at_level("WARNING"):
+        intro = select_intro_matches(
+            cand, [], rules={"matching": {"max_intro_consultants": 3,
+                                          "min_intro_consultants": 1}},
+            consultants=[])  # プールが空
+    assert intro == []
+    assert any("保証人数" in r.message for r in caplog.records)
+
+
 def test_select_intro_matches_soft_match_by_specialty():
     # 共通点マッチ（企業/業界/大学/職種）は無いが、専門領域が候補者の職種に近い場合、
     # soft マッチとして紹介に含める（roles は空なので共通点マッチにはならない）。

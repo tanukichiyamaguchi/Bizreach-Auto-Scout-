@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 
 from .config import load_consultants, scout_rules
+from .logging_config import logger
 from .models import Candidate, ConsultantMatch, ConsultantProfile
 
 
@@ -230,6 +231,15 @@ def select_intro_matches(
         selected.append(ConsultantMatch(
             consultant=c, common_points=[_fallback_point(c)], category="fallback"))
         ids.add(c.id)
+
+    # 保証が満たせなかった（＝コンサルタントデータが空/不足）ことを黙殺せず必ず知らせる。
+    # 例: import-consultants の失敗で consultants.json が空になると全メールで紹介が抜ける。
+    if len(selected) < min_n:
+        logger.warning(
+            "コンサルタント紹介の保証人数(min=%d)を確保できませんでした（確保 %d名）。"
+            "在籍コンサルタントデータ（config/consultants.json）が空/不足の可能性があります。",
+            min_n, len(selected),
+        )
 
     return selected
 
