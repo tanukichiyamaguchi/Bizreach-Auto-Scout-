@@ -121,8 +121,22 @@ def parse_docx(path: str | Path) -> list[ConsultantProfile]:
     return consultants
 
 
-def import_to_json(docx_path: str | Path, out_path: str | Path) -> int:
+def import_to_json(docx_path: str | Path, out_path: str | Path, force: bool = False) -> int:
+    """docx を解析して consultants.json を生成する。解析件数を返す。
+
+    安全策: 解析結果が0件のとき、既存の out_path に有効なコンサルタントが入っている場合は
+    上書きしない（RuntimeError）。docx の書式違いで空になり、既存の良いデータを潰して
+    全メールから紹介が消える事故を防ぐ。force=True で明示的に上書きできる。
+    """
     consultants = parse_docx(docx_path)
+    if not consultants and not force:
+        existing = _existing_consultant_count(out_path)
+        if existing > 0:
+            raise RuntimeError(
+                f"docx から0名しか解析できませんでした。既存の {out_path} には {existing} 名が"
+                "登録されているため、上書きを中止しました（空データで全メールの紹介が消えるのを防止）。"
+                "docx の書式を確認するか、意図的な場合は force=True で実行してください。"
+            )
     payload = {
         "_note": f"{Path(docx_path).name} から自動生成。内容を必ず確認してください。",
         "consultants": [c.model_dump() for c in consultants],
@@ -132,3 +146,15 @@ def import_to_json(docx_path: str | Path, out_path: str | Path) -> int:
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return len(consultants)
+
+
+def _existing_consultant_count(out_path: str | Path) -> int:
+    """既存の consultants.json に登録済みのコンサルタント数を返す（無ければ0）。"""
+    p = Path(out_path)
+    if not p.exists():
+        return 0
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return len(data.get("consultants", []))
+    except (json.JSONDecodeError, OSError):
+        return 0

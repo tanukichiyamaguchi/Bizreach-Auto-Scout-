@@ -129,8 +129,9 @@ class ScoutGenerator:
         company = company_config()
         if matches is None:
             matches = match_consultants(candidate, rules=rules)
-        # 本文で紹介するのは上位N名まで（全員紹介は非現実的で省略の一因だった）。
-        intro_matches = select_intro_matches(matches, rules)
+        # 全メールに必ずコンサルタント紹介を載せる（共通点マッチが無くても近い経歴/
+        # フォールバックで min〜max 名を確保する。最重要指示の担保）。
+        intro_matches = select_intro_matches(candidate, matches, rules)
         resend_max = max(0, rules.get("resend", {}).get("max_consultant_mentions", 1))
         resend_intro_matches = intro_matches[:resend_max]
 

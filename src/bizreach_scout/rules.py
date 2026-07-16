@@ -71,6 +71,9 @@ class MatchingRules(BaseModel):
     insurance_keywords: list[str] = Field(default_factory=list)
     match_fields: list[str] = Field(default_factory=list)
     max_intro_consultants: int = 3
+    # 全メールに載せるコンサルタント紹介の下限（保証人数）。共通点が無くても近い経歴/
+    # フォールバックで最低この人数を必ず紹介する。max_intro_consultants=0 のときのみ無効。
+    min_intro_consultants: int = 1
 
 
 class ToneMatch(BaseModel):

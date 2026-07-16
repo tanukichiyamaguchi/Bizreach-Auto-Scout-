@@ -76,38 +76,75 @@ def test_render_block_includes_consultant_id():
     assert "consultant_id: c001" in block
 
 
-# --- select_intro_matches（本文で紹介する人数の上限）--------------------------
+# --- select_intro_matches（人数上限＋全メールに必ず紹介を載せる保証）------------
 
 def test_select_intro_matches_caps_to_configured_max():
     cand = make_candidate(prior_companies=["リクルート"], industry="人材")
     matches = match_consultants(cand, consultants=SAMPLE)
     assert len(matches) > 1  # SAMPLEにはrecruitマッチが複数ある
-    capped = select_intro_matches(matches, rules={"matching": {"max_intro_consultants": 1}})
+    capped = select_intro_matches(
+        cand, matches, rules={"matching": {"max_intro_consultants": 1}}, consultants=SAMPLE)
     assert len(capped) == 1
     assert capped[0].consultant.id == matches[0].consultant.id  # 優先順位の先頭を維持
 
 
 def test_select_intro_matches_zero_means_none():
-    # resend.max_consultant_mentions と同じ「0=紹介しない」の意味に統一する。
-    # （運用者が機能オフのつもりで0を設定した際、全員紹介が復活しないように）
+    # max_intro_consultants=0 のときのみ紹介を完全に無効化する（min も無視）。
     cand = make_candidate(prior_companies=["リクルート"], industry="人材")
     matches = match_consultants(cand, consultants=SAMPLE)
-    capped = select_intro_matches(matches, rules={"matching": {"max_intro_consultants": 0}})
-    assert capped == []
-
-
-def test_select_intro_matches_negative_clamped_to_zero():
-    cand = make_candidate(prior_companies=["リクルート"], industry="人材")
-    matches = match_consultants(cand, consultants=SAMPLE)
-    capped = select_intro_matches(matches, rules={"matching": {"max_intro_consultants": -1}})
+    capped = select_intro_matches(
+        cand, matches, rules={"matching": {"max_intro_consultants": 0}}, consultants=SAMPLE)
     assert capped == []
 
 
 def test_select_intro_matches_default_caps_at_three():
     cand = make_candidate(prior_companies=["リクルート"], industry="人材")
     matches = match_consultants(cand, consultants=SAMPLE)
-    capped = select_intro_matches(matches)  # rules未指定→scout_rules.yamlの既定(3)
+    capped = select_intro_matches(cand, matches, consultants=SAMPLE)  # 既定 max=3
     assert len(capped) <= 3
+
+
+def test_select_intro_matches_guarantees_min_when_no_common_ground():
+    # 共通点マッチが0でも、フォールバックで最低1名を必ず確保する（最重要要件）。
+    cand = make_candidate(prior_companies=["無関係株式会社"], industry="製造",
+                          current_company="無関係株式会社", university="無名大学",
+                          job_function="製造")
+    matches = match_consultants(cand, consultants=SAMPLE)
+    assert matches == []  # 共通点は無い
+    intro = select_intro_matches(
+        cand, matches,
+        rules={"matching": {"max_intro_consultants": 3, "min_intro_consultants": 1}},
+        consultants=SAMPLE)
+    assert len(intro) >= 1  # それでも必ず1名以上紹介する
+    assert intro[0].category in ("soft", "fallback")
+
+
+def test_select_intro_matches_warns_when_pool_empty(caplog):
+    # コンサルタントデータが空だと保証を満たせない → 黙殺せず警告を出す（事故検知）。
+    cand = make_candidate(prior_companies=["無関係"], industry="製造", job_function="製造")
+    with caplog.at_level("WARNING"):
+        intro = select_intro_matches(
+            cand, [], rules={"matching": {"max_intro_consultants": 3,
+                                          "min_intro_consultants": 1}},
+            consultants=[])  # プールが空
+    assert intro == []
+    assert any("保証人数" in r.message for r in caplog.records)
+
+
+def test_select_intro_matches_soft_match_by_specialty():
+    # 共通点マッチ（企業/業界/大学/職種）は無いが、専門領域が候補者の職種に近い場合、
+    # soft マッチとして紹介に含める（roles は空なので共通点マッチにはならない）。
+    consultants = [
+        ConsultantProfile(id="s1", display_name="営業のプロ", roles=[],
+                          specialties=["法人営業支援"], profile_url="https://example.com/s1"),
+    ]
+    cand = make_candidate(prior_companies=["無関係"], current_company="無関係",
+                          industry="製造", university="無名", job_function="法人営業")
+    matches = match_consultants(cand, consultants=consultants)
+    assert matches == []  # 共通点マッチは無い
+    intro = select_intro_matches(cand, matches, consultants=consultants)
+    assert [m.consultant.id for m in intro] == ["s1"]
+    assert intro[0].category == "soft"
 
 
 # --- render_consultant_intro_section（1人ずつ独立したブロックの組み立て）--------
@@ -168,14 +205,28 @@ def test_render_consultant_intro_section_strips_duplicate_heading_and_url():
     assert "Aさんは共通点があります。" in section
 
 
-def test_render_consultant_intro_section_skips_missing_blurb():
+def test_render_consultant_intro_section_fills_missing_blurb_by_default():
+    # モデルが blurb を出さなくても、既定紹介文（default_blurb）を補い必ずブロックを出す。
+    m1 = ConsultantMatch(
+        consultant=ConsultantProfile(id="a", display_name="A太郎",
+                                     specialties=["経営戦略"],
+                                     profile_url="https://example.com/a"),
+        common_points=["共通点"],
+    )
+    section = render_consultant_intro_section("導入文", {}, [m1])
+    assert section != ""
+    assert "▼A太郎 プロフィール" in section
+    assert "A太郎" in section  # 既定紹介文にも氏名が入る
+
+
+def test_render_consultant_intro_section_can_skip_missing_when_disabled():
+    # fill_missing=False を明示した場合のみ、blurb 未提供はブロックごと省略する。
     m1 = ConsultantMatch(
         consultant=ConsultantProfile(id="a", display_name="A太郎",
                                      profile_url="https://example.com/a"),
         common_points=["共通点"],
     )
-    # blurb が提供されていないコンサルタントはブロックごと省略する。
-    assert render_consultant_intro_section("導入文", {}, [m1]) == ""
+    assert render_consultant_intro_section("導入文", {}, [m1], fill_missing=False) == ""
 
 
 def test_render_consultant_intro_section_empty_matches_yields_empty_string():

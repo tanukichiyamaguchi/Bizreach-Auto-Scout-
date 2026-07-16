@@ -201,11 +201,32 @@ def test_consultant_intro_rendered_as_separate_blocks():
     assert "\n\n" in body[idx_inoue_url:idx_sometani_blurb]
 
 
-def test_no_consultant_matches_yields_no_intro_block():
+def test_no_common_ground_still_includes_fallback_intro():
+    # 共通点マッチが無くても、フォールバックで必ずコンサルタント紹介を載せる（最重要要件）。
+    # モデルが blurb を出さなくても、既定紹介文が補われ紹介ブロックが本文に必ず出る。
     gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
     scout = gen.generate(make_candidate(), matches=[])
+    assert "▼" in scout.first.body  # 紹介ブロックが必ず存在する
+
+
+def test_intro_disabled_when_max_is_zero():
+    # max_intro_consultants=0 のときのみ紹介を完全に無効化できる。
+    gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
+    orig = gen  # generate は scout_rules() を読むため、rules を直接差し替える
+    import bizreach_scout.generation.generator as gmod
+    real_rules = gmod.scout_rules
+
+    def _rules_zero():
+        r = dict(real_rules())
+        r["matching"] = {**r.get("matching", {}), "max_intro_consultants": 0}
+        return r
+
+    gmod.scout_rules = _rules_zero
+    try:
+        scout = orig.generate(make_candidate(), matches=[])
+    finally:
+        gmod.scout_rules = real_rules
     assert "▼" not in scout.first.body
-    assert "▼" not in scout.resend.body
 
 
 def test_missing_consultant_intro_triggers_retry_and_fixes_it():
