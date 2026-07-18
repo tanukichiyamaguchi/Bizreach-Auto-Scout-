@@ -30,9 +30,9 @@ SEGMENT_SHEET = "セグメント分析"
 TREND_SHEET = "傾向分析"
 
 SENT_LOG_HEADER = [
-    "会員番号", "氏名", "初回送信日", "再送日", "送信枠", "トーン",
+    "会員番号", "氏名", "初回送信日", "曜日", "再送日", "送信枠", "トーン",
     "年齢", "年齢帯", "性別", "学歴", "大学", "現職企業", "役職",
-    "転職回数", "現職在籍年数", "想定年収", "会員クラス", "ステータス",
+    "転職回数", "現職在籍年数", "想定年収", "会員クラス", "ステータス", "本文字数",
     "返信あり", "返信日", "検知", "メモ",
 ]
 SENT_LOG_NOTE = ("このシートは自動更新されます。手動編集が保持されるのは"
@@ -100,7 +100,7 @@ def read_manual_entries(rows: list[list[str]]) -> list[tuple[str, bool, str, str
 
 
 def _sent_log_rows(records: list[SentRecord]) -> list[list[object]]:
-    from .aggregate import channel_label, education_label
+    from .aggregate import channel_label, education_label, weekday_label
 
     rows: list[list[object]] = [[SENT_LOG_NOTE], list(SENT_LOG_HEADER)]
     for r in records:
@@ -108,6 +108,7 @@ def _sent_log_rows(records: list[SentRecord]) -> list[list[object]]:
             r.member_no,
             r.candidate_name,
             _fmt_dt(r.first_sent_at),
+            weekday_label(r.first_sent_at),
             _fmt_dt(r.resent_at),
             channel_label(r.channel),
             r.tone_key,
@@ -123,6 +124,7 @@ def _sent_log_rows(records: list[SentRecord]) -> list[list[object]]:
             r.salary_current,
             r.candidate_class,
             r.status_flags,
+            r.body_len if r.body_len is not None else "",
             bool(r.replied),
             _fmt_dt(r.replied_at) or (r.replied_at or ""),
             {"auto": "自動", "manual": "手動"}.get(r.detected_by, r.detected_by),
@@ -318,6 +320,8 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
             segment_id = sheets.sheet_id(SEGMENT_SHEET)
             n_age = min(len(segments[0].rows), SEGMENT_MAX_ROWS)
             n_edu = min(len(segments[1].rows), SEGMENT_MAX_ROWS)
+            n_wd = min(len(segments[6].rows), SEGMENT_MAX_ROWS)
+            n_hr = min(len(segments[7].rows), SEGMENT_MAX_ROWS)
             report.charts = ensure_charts(sheets, [
                 (WEEKLY_SHEET,
                  _combo_chart_spec(weekly_id, len(weekly), "週次 送信数と返信率"),
@@ -331,6 +335,12 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
                 (SEGMENT_SHEET,
                  _bar_chart_spec(segment_id, 1, n_edu, "学歴別 返信率"),
                  _chart_position(segment_id, SEGMENT_BLOCK_ROWS, 5)),
+                (SEGMENT_SHEET,
+                 _bar_chart_spec(segment_id, 6, n_wd, "曜日別 返信率"),
+                 _chart_position(segment_id, SEGMENT_BLOCK_ROWS * 2, 5)),
+                (SEGMENT_SHEET,
+                 _bar_chart_spec(segment_id, 7, n_hr, "時間帯別 返信率"),
+                 _chart_position(segment_id, SEGMENT_BLOCK_ROWS * 3, 5)),
             ])
     except Exception as e:
         logger.warning("チャート/入力規則の更新に失敗（データ同期は完了済み）: %s", e)

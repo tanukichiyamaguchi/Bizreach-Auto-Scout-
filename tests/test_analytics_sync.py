@@ -78,11 +78,11 @@ def test_sync_writes_all_sheets_and_checkbox_rule(tmp_path):
     assert "会員番号" in log[1]
     members = {row[0] for row in log[2:]}
     assert members == {"BU1", "BU2"}
-    # チェックボックス入力規則 + チャート4種が batch_update に含まれる。
+    # チェックボックス入力規則 + チャート6種（週次/月次/年齢帯/学歴/曜日/時間帯）。
     kinds = [next(iter(r)) for r in sheets.batch_requests]
     assert kinds.count("setDataValidation") == 1
-    assert kinds.count("addChart") == 4
-    assert report.charts == 4
+    assert kinds.count("addChart") == 6
+    assert report.charts == 6
 
 
 def test_sync_reads_manual_checks_before_rewrite(tmp_path):

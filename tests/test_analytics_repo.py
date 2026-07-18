@@ -121,6 +121,9 @@ def test_analytics_rows_pivots_first_resend_and_joins_replies(tmp_path):
     assert r["member_no"] == "BU3765516"
     assert r["first_sent_at"] and r["resent_at"]
     assert r["replied"] == 1 and r["detected_by"] == "manual"
+    # 文面特徴（scouts JOIN）: 件名「【Premium Offer】初回」/ 本文「初回本文」の文字数。
+    assert r["body_len"] == len("初回本文")
+    assert r["subject_len"] == len("【Premium Offer】初回")
     repo.close()
 
 
