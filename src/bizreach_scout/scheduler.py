@@ -66,7 +66,8 @@ def run_due_resends(repo: Repository, sender, now: datetime | None = None) -> Re
         outcome = sender.send_scout(candidate, row["subject"], row["body"],
                                     idempotency_key=idem_key)
         if outcome.status == "sent":
-            repo.mark_sent(mno, "resend", resend_after_days())
+            repo.mark_sent(mno, "resend", resend_after_days(),
+                           channel=getattr(outcome, "endpoint", ""))
             report.sent += 1
             logger.info("再送完了: %s", mno)
             time.sleep(random.uniform(settings.send_delay_min,

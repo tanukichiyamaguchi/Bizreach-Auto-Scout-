@@ -274,6 +274,130 @@ def report() -> None:
     repo.close()
 
 
+@cli.group()
+def analytics() -> None:
+    """スカウト分析（Google Sheets への同期・集計レポート）。"""
+
+
+def _sheets_client():
+    """設定から GspreadSheets を構築する（未設定なら分かりやすく失敗）。"""
+    from .analytics.sheets import GspreadSheets
+
+    settings = get_settings()
+    if not settings.gsheet_spreadsheet_id or not settings.gsheet_credentials:
+        raise click.ClickException(
+            "Google Sheets が未設定です。BIZSCOUT_GSHEET_SPREADSHEET_ID と "
+            "BIZSCOUT_GSHEET_CREDENTIALS（サービスアカウント鍵JSONのパス）を設定してください。"
+            "手順は docs/スカウト分析.md を参照。"
+        )
+    return GspreadSheets(settings.gsheet_spreadsheet_id, settings.gsheet_credentials)
+
+
+@analytics.command(name="sync")
+@click.option("--charts/--no-charts", default=True, help="チャートの作成/更新を行うか")
+@click.option("--trend/--no-trend", default=True,
+              help="傾向分析（週1回・Claude生成）の更新判定を行うか")
+def analytics_sync(charts: bool, trend: bool) -> None:
+    """DBの送信・返信データを Google スプレッドシートへ同期する（ブラウザ不要）。"""
+    from .analytics.sync import sync_analytics
+    from .analytics.trend import generate_trend_commentary
+
+    sheets = _sheets_client()
+    repo = Repository()
+    try:
+        trend_fn = (lambda w, m, s: generate_trend_commentary(w, m, s)) if trend else None
+        report = sync_analytics(repo, sheets, with_charts=charts, trend_fn=trend_fn)
+        click.echo(report.summary())
+        if report.errors:
+            click.echo("警告: " + " / ".join(report.errors))
+    finally:
+        repo.close()
+
+
+@analytics.command(name="report")
+def analytics_report() -> None:
+    """週次・月次の返信率を端末に表示する（Sheets設定なしでも確認できる）。"""
+    from datetime import datetime as _dt
+
+    from .analytics.aggregate import (
+        SentRecord,
+        monthly_summary,
+        standard_segments,
+        weekly_summary,
+    )
+
+    repo = Repository()
+    try:
+        repo.backfill_sent_log()
+        records = [rec for r in repo.analytics_rows()
+                   if (rec := SentRecord.from_row(r)) is not None]
+        now = _dt.now()
+        click.echo(f"==== 送信済み {len(records)}名 / "
+                   f"返信 {sum(1 for r in records if r.replied)}名 ====")
+        click.echo("\n-- 週次（直近8週）--")
+        for s in weekly_summary(records, now=now, weeks=8):
+            click.echo(f"  {s.label}: 送信{s.sent} 返信{s.replied} ({s.rate * 100:.1f}%)")
+        click.echo("\n-- 月次（直近6ヶ月）--")
+        for s in monthly_summary(records, now=now, months=6):
+            click.echo(f"  {s.label}: 送信{s.sent} 返信{s.replied} ({s.rate * 100:.1f}%)")
+        for table in standard_segments(records)[:3]:
+            click.echo(f"\n-- {table.title} --")
+            for row in table.rows:
+                click.echo(f"  {row.segment}: 送信{row.sent} 返信{row.replied} "
+                           f"({row.rate * 100:.1f}%)")
+    finally:
+        repo.close()
+
+
+@cli.command(name="sync-replies")
+@click.option("--max", "max_checks", default=None, type=int,
+              help="1回で確認する最大人数（既定は BIZSCOUT_REPLY_CHECK_MAX）")
+@click.option("--headless/--no-headless", default=True)
+def sync_replies_cmd(max_checks: int | None, headless: bool) -> None:
+    """送信済み・未返信の候補者のレジュメを再取得し、返信を自動検知してDBへ記録する。"""
+    from .analytics.reply_sync import sync_replies
+    from .bizreach.api import BizreachApi
+
+    settings = get_settings()
+    with _bizreach_client(headless) as client:
+        api = BizreachApi(client)
+        repo = Repository()
+        try:
+            report = sync_replies(
+                api, repo,
+                max_checks=max_checks or settings.reply_check_max,
+                recent_days=settings.reply_recent_days,
+                client=client,
+            )
+            click.echo(report.summary())
+        finally:
+            repo.close()
+
+
+@cli.command(name="probe-replies")
+@click.option("--headless/--no-headless", default=True)
+def probe_replies(headless: bool) -> None:
+    """返信データの偵察（実送信なし）。メッセージ系画面のAPI応答を data/exports にダンプする。"""
+    from .bizreach.reply_probe import ReplyProbe
+
+    repo = Repository()
+    try:
+        # 送信済み候補者を1名選び、レジュメの返信シグナルキーも抜粋する。
+        row = repo.conn.execute(
+            "SELECT member_no FROM scouts WHERE kind='first' AND status='sent' "
+            "ORDER BY sent_at DESC LIMIT 1").fetchone()
+        mrccid = None
+        if row:
+            cand = repo.load_candidate(row["member_no"])
+            mrccid = cand.mrccid if cand else None
+    finally:
+        repo.close()
+
+    with _bizreach_client(headless) as client:
+        ReplyProbe(client).run(sent_mrccid=mrccid)
+        click.echo("偵察完了。data/exports の reply_* を確認してください（実送信はしていません）。")
+
+
 @cli.command()
 @click.option("--headless/--no-headless", default=False,
               help="既定はブラウザ表示（2FAを手動入力するため）")

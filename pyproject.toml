@@ -20,6 +20,8 @@ dependencies = [
     "click>=8.1.0",
     "playwright>=1.40.0",
     "python-docx>=1.1.0",
+    "gspread>=6.0.0",
+    "google-auth>=2.23.0",
 ]
 
 [project.scripts]
@@ -61,6 +63,7 @@ module = [
     "bizreach_scout.bizreach.client",
     "bizreach_scout.bizreach.send_probe",
     "bizreach_scout.bizreach.pickup_probe",
+    "bizreach_scout.bizreach.reply_probe",
     "bizreach_scout.ingest.bizreach_pickup_source",
 ]
 ignore_errors = true

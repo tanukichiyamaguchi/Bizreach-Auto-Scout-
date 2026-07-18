@@ -223,7 +223,8 @@ class ScoutPipeline:
         outcome = self.sender.send_scout(candidate, subject, body, reminder=reminder,
                                          idempotency_key=idem_key)
         if outcome.status == "sent":
-            self.repo.mark_sent(mno, "first", self.resend_after_days)
+            self.repo.mark_sent(mno, "first", self.resend_after_days,
+                                channel=getattr(outcome, "endpoint", ""))
             if reminder:
                 # ビズリーチ側が5日後に自動追客するため、独自再送は行わない（二重送信防止）。
                 self.repo.mark_skipped(mno, "resend", "native_reminder(ビズリーチ追客で自動送信)")

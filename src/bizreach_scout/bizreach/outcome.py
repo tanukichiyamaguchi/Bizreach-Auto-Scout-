@@ -13,6 +13,8 @@ from dataclasses import dataclass
 class SendOutcome:
     status: str  # sent / dry_run / failed / blocked
     detail: str = ""
+    # 送信チャネル（platinum / normal / pickup 等）。分析（送信枠別の返信率）に使う。
+    endpoint: str = ""
 
     @property
     def ok(self) -> bool:
