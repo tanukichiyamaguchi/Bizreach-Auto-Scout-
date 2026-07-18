@@ -54,13 +54,13 @@ class ApiScoutSender:
                 dry_run=self.dry_run, reminder=reminder,
                 idempotency_key=idempotency_key,
             )
-        endpoint = result.get("endpoint")
+        endpoint = str(result.get("endpoint") or ("pickup" if self.pickup else ""))
         status = result.get("status")
         detail = f"{endpoint} status={status}"
 
         if result.get("skipped"):
             # 既送信・残数枯渇・対象外など。送信はしていない。
-            return SendOutcome("blocked", f"skipped:{result.get('skipped')}")
+            return SendOutcome("blocked", f"skipped:{result.get('skipped')}", endpoint)
         if status in (200, 201):
-            return SendOutcome("dry_run" if self.dry_run else "sent", detail)
-        return SendOutcome("failed", f"{detail} body={result}")
+            return SendOutcome("dry_run" if self.dry_run else "sent", detail, endpoint)
+        return SendOutcome("failed", f"{detail} body={result}", endpoint)

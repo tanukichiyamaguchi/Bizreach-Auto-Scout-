@@ -24,9 +24,10 @@ on:
         type: string
         default: "30"
       mode:
-        description: "実行モード（scout / pickup / test-pickup-send=ピックアップ送信API検証 / probe-* / test-send）"
+        description: "実行モード（scout / pickup / analytics=Sheets同期のみ / sync-replies=返信検知のみ / probe-replies=返信API偵察 / ほかprobe系）"
         type: choice
-        options: ["scout", "pickup", "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
+        options: ["scout", "pickup", "analytics", "sync-replies", "probe-replies",
+                  "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
         default: "scout"
   schedule:
     # GitHub の schedule は毎時00分が最も混雑し、数時間の遅延やドロップが起こり得る。
@@ -52,11 +53,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      # 全タイムスタンプ（送信記録・週次集計）をJSTで統一する。
+      TZ: "Asia/Tokyo"
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       BIZREACH_EMAIL: ${{ secrets.BIZREACH_EMAIL }}
       BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
       BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-4-8' }}
       BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '20' }}
+      BIZSCOUT_GSHEET_SPREADSHEET_ID: ${{ vars.BIZSCOUT_GSHEET_SPREADSHEET_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -199,6 +203,46 @@ jobs:
         run: |
           echo "ピックアップ送信APIを dryRun=True で検証します（実送信なし・残数消費なし）。"
           bizscout test-pickup-send --kind job
+
+      # 返信データの偵察（実送信なし）。メッセージ系画面のAPI応答を artifact に残す。
+      - name: Probe replies (返信API偵察・実送信なし)
+        if: env.RUN_MODE == 'probe-replies'
+        run: bizscout probe-replies
+
+      # --- スカウト分析 -------------------------------------------------------
+      # 返信の自動検知（送信済み・未返信のレジュメを再取得してシグナル確認）。
+      - name: Sync replies (返信自動検知)
+        if: >-
+          (github.event_name == 'schedule' || env.RUN_MODE == 'scout'
+           || env.RUN_MODE == 'sync-replies')
+        continue-on-error: true
+        run: bizscout sync-replies
+
+      # Google サービスアカウント鍵を secret から復元（キャッシュ/artifact に載る
+      # data/ 配下には置かない）。
+      - name: Seed Google service account
+        if: always()
+        env:
+          GSA_B64: ${{ secrets.GSHEET_SERVICE_ACCOUNT_B64 }}
+        run: |
+          if [ -n "$GSA_B64" ]; then
+            echo "$GSA_B64" | base64 -d > "$RUNNER_TEMP/gsa.json"
+            echo "BIZSCOUT_GSHEET_CREDENTIALS=$RUNNER_TEMP/gsa.json" >> "$GITHUB_ENV"
+            echo "Google サービスアカウント鍵を復元しました。"
+          else
+            echo "GSHEET_SERVICE_ACCOUNT_B64 未設定。Sheets 同期はスキップされます。"
+          fi
+
+      # 送信・返信データを Google スプレッドシートへ同期（設定済みの場合のみ）。
+      - name: Sync analytics to Google Sheets
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "$BIZSCOUT_GSHEET_CREDENTIALS" ] && [ -n "$BIZSCOUT_GSHEET_SPREADSHEET_ID" ]; then
+            bizscout analytics sync
+          else
+            echo "Google Sheets 未設定のため分析同期をスキップします（docs/スカウト分析.md 参照）。"
+          fi
 
       - name: Status report
         if: always()

@@ -69,6 +69,16 @@ class Settings(BaseSettings):
     home: str = "."
     db_path: str = "data/bizscout.db"
 
+    # --- スカウト分析（Google Sheets 連携・返信自動検知）---
+    # 分析結果を書き込む Google スプレッドシートのID（URLの /d/ と /edit の間の文字列）。
+    gsheet_spreadsheet_id: str = ""
+    # サービスアカウント鍵JSONのパス（CIでは $RUNNER_TEMP に復号して渡す）。
+    gsheet_credentials: str = ""
+    # 返信自動チェック: 1回の実行で確認する最大人数（レジュメ再取得の負荷制御）。
+    reply_check_max: int = 60
+    # 返信自動チェック: 初回送信から何日以内の候補者を確認対象にするか。
+    reply_recent_days: int = 45
+
     @property
     def anthropic_api_key(self) -> str:
         return os.environ.get("ANTHROPIC_API_KEY", "")
