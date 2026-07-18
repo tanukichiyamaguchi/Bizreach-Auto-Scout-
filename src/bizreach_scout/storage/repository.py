@@ -338,7 +338,11 @@ class Repository:
         return after - before
 
     def analytics_rows(self) -> list[sqlite3.Row]:
-        """分析用: 会員単位に first/resend をピボットし replies を LEFT JOIN した行。"""
+        """分析用: 会員単位に first/resend をピボットし replies を LEFT JOIN した行。
+
+        scouts との JOIN で文面の特徴（件名・本文の文字数）も取得する
+        （「どのような文面で送ると返信率が高いか」の分析用）。
+        """
         return self.conn.execute(
             """
             SELECT
@@ -350,6 +354,8 @@ class Repository:
                 f.current_company, f.current_title,
                 f.job_change_count, f.tenure_years, f.salary_current,
                 f.candidate_class, f.status_flags,
+                LENGTH(sc.subject)           AS subject_len,
+                LENGTH(sc.body)              AS body_len,
                 COALESCE(rp.replied, 0)      AS replied,
                 rp.replied_at,
                 COALESCE(rp.detected_by, '') AS detected_by,
@@ -357,6 +363,7 @@ class Repository:
                 COALESCE(rp.note, '')        AS note
             FROM sent_log f
             LEFT JOIN sent_log rs ON rs.member_no = f.member_no AND rs.kind = 'resend'
+            LEFT JOIN scouts sc ON sc.member_no = f.member_no AND sc.kind = 'first'
             LEFT JOIN replies rp ON rp.member_no = f.member_no
             WHERE f.kind = 'first'
             ORDER BY f.sent_at ASC, f.member_no ASC

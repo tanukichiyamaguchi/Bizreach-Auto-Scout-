@@ -108,11 +108,75 @@ def test_segment_summary_with_order_and_rate():
     assert table.rows[0].rate == 0.5
 
 
-def test_standard_segments_returns_six_tables():
+def test_standard_segments_returns_eleven_tables_in_stable_order():
     tables = standard_segments([_rec()])
+    # 先頭2つ・7/8番目はチャートが固定位置で参照するため順序を変えてはならない。
     assert [t.title for t in tables] == [
         "年齢帯別", "学歴別", "転職回数別", "トーン別", "送信枠別", "会員クラス別",
+        "曜日別", "時間帯別", "想定年収帯別", "会員ステータス別（重複あり）", "本文文字数帯別",
     ]
+
+
+def test_weekday_and_hour_band():
+    from bizreach_scout.analytics.aggregate import hour_band, weekday_label
+
+    dt = datetime(2026, 7, 14, 16, 30)  # 火曜 16:30
+    assert weekday_label(dt) == "火"
+    assert hour_band(dt) == "15〜18時"
+    assert hour_band(datetime(2026, 7, 14, 18, 0)) == "18〜21時"
+    assert hour_band(datetime(2026, 7, 14, 8, 59)) == "〜9時"
+    assert hour_band(datetime(2026, 7, 14, 23, 0)) == "21時〜"
+    assert weekday_label(None) == "不明" and hour_band(None) == "不明"
+
+
+def test_body_length_band():
+    from bizreach_scout.analytics.aggregate import body_length_band
+
+    assert body_length_band(None) == "不明"
+    assert body_length_band(600) == "〜600字"
+    assert body_length_band(601) == "601〜800字"
+    assert body_length_band(1000) == "801〜1000字"
+    assert body_length_band(1500) == "1201字〜"
+
+
+def test_salary_segments_sorted_numerically():
+    from bizreach_scout.analytics.aggregate import salary_segments
+
+    records = [
+        _rec("BU1", salary_current="1000万円以上"),
+        _rec("BU2", salary_current="600〜750万円"),
+        _rec("BU3", salary_current="750〜1000万円", replied=True),
+    ]
+    table = salary_segments(records)
+    assert [r.segment for r in table.rows] == ["600〜750万円", "750〜1000万円", "1000万円以上"]
+
+
+def test_status_flag_segments_counts_overlapping_flags():
+    from bizreach_scout.analytics.aggregate import status_flag_segments
+
+    records = [
+        _rec("BU1", status_flags="hot/will", replied=True),  # HOTとWILL両方に計上
+        _rec("BU2", status_flags="will"),
+        _rec("BU3", status_flags=""),
+    ]
+    table = status_flag_segments(records)
+    by = {r.segment: r for r in table.rows}
+    assert by["HOT"].sent == 1 and by["HOT"].replied == 1
+    assert by["WILL"].sent == 2 and by["WILL"].replied == 1
+    assert by["なし"].sent == 1
+
+
+def test_segments_by_weekday_and_hour_rates():
+    # 火曜16時台×返信あり、月曜18時台×返信なし → 曜日別・時間帯別に正しく割れる。
+    records = [
+        _rec("BU1", first="2026-07-14T16:30:00", replied=True),   # 火
+        _rec("BU2", first="2026-07-13T18:40:00", replied=False),  # 月
+    ]
+    tables = {t.title: t for t in standard_segments(records)}
+    wd = {r.segment: r for r in tables["曜日別"].rows}
+    assert wd["火"].replied == 1 and wd["月"].replied == 0
+    hr = {r.segment: r for r in tables["時間帯別"].rows}
+    assert hr["15〜18時"].rate == 1.0 and hr["18〜21時"].rate == 0.0
 
 
 def test_empty_records_safe():
