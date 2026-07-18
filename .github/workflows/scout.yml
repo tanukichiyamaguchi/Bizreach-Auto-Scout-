@@ -219,18 +219,33 @@ jobs:
         run: bizscout sync-replies
 
       # Google サービスアカウント鍵を secret から復元（キャッシュ/artifact に載る
-      # data/ 配下には置かない）。
+      # data/ 配下には置かない）。secret には base64 でも「鍵JSONそのまま」でもよい。
+      # この工程の失敗で送信ジョブを赤にしない（警告してスキップ）。
       - name: Seed Google service account
         if: always()
+        continue-on-error: true
         env:
           GSA_B64: ${{ secrets.GSHEET_SERVICE_ACCOUNT_B64 }}
         run: |
-          if [ -n "$GSA_B64" ]; then
-            echo "$GSA_B64" | base64 -d > "$RUNNER_TEMP/gsa.json"
-            echo "BIZSCOUT_GSHEET_CREDENTIALS=$RUNNER_TEMP/gsa.json" >> "$GITHUB_ENV"
-            echo "Google サービスアカウント鍵を復元しました。"
-          else
+          if [ -z "$GSA_B64" ]; then
             echo "GSHEET_SERVICE_ACCOUNT_B64 未設定。Sheets 同期はスキップされます。"
+            exit 0
+          fi
+          out="$RUNNER_TEMP/gsa.json"
+          if [ "${GSA_B64#\{}" != "$GSA_B64" ]; then
+            # '{' で始まる = 鍵JSONがそのまま貼られている（base64不要の簡単ルート）。
+            printf '%s' "$GSA_B64" > "$out"
+          else
+            # base64。コピー時に混入しがちな空白・改行を除去してから復号する。
+            if ! printf '%s' "$GSA_B64" | tr -d ' \n\r\t' | base64 -d > "$out" 2>/dev/null; then
+              echo "::warning::GSHEET_SERVICE_ACCOUNT_B64 を復号できませんでした。鍵JSONの中身をそのまま Secret に貼り直すのが確実です（docs/スカウト分析.md）。"
+              exit 0
+            fi
+          fi
+          if python3 -c "import json;d=json.load(open('$out'));assert d.get('client_email');print('鍵を復元:', d['client_email'])"; then
+            echo "BIZSCOUT_GSHEET_CREDENTIALS=$out" >> "$GITHUB_ENV"
+          else
+            echo "::warning::鍵JSONの形式が不正です（client_email が見つかりません）。ダウンロードした鍵JSONの中身を全文コピーして Secret に貼り直してください。"
           fi
 
       # 送信・返信データを Google スプレッドシートへ同期（設定済みの場合のみ）。
