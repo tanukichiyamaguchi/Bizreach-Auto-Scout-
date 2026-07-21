@@ -38,17 +38,30 @@ def extract_member_nos(html: str) -> list[str]:
     return out
 
 
+def _member_no_variants(member_no: str) -> tuple[str, ...]:
+    """会員番号の表記ゆれ（BU2553603 / BU02553603）の両方を照合対象にする。"""
+    if not member_no:
+        return ()
+    m = re.fullmatch(r"BU(\d{7})", member_no)
+    if m:
+        return (member_no, f"BU0{m.group(1)}")
+    m = re.fullmatch(r"BU0(\d{7})", member_no)
+    if m:
+        return (member_no, f"BU{m.group(1)}")
+    return (member_no,)
+
+
 def find_sent_in_html(html: str, pairs: list[tuple[str, str]]) -> set[str]:
     """送信済み候補者のうち、HTML内に識別子が現れる member_no の集合を返す（純関数）。
 
-    pairs: (member_no, mrccid) のリスト。member_no か mrccid のどちらかが
-    HTMLに部分文字列として現れれば「受信箱にその候補者のメッセージがある」とみなす。
+    pairs: (member_no, mrccid) のリスト。member_no（ゼロ埋め表記ゆれ含む）か mrccid の
+    どちらかがHTMLに部分文字列として現れれば「受信箱にその候補者のメッセージがある」とみなす。
     """
     if not html:
         return set()
     found: set[str] = set()
     for member_no, mrccid in pairs:
-        if (member_no and member_no in html) or (
+        if any(v in html for v in _member_no_variants(member_no)) or (
                 mrccid and len(mrccid) >= _MIN_MRCCID_LEN and mrccid in html):
             found.add(member_no)
     return found

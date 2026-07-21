@@ -2,10 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# ゼロ埋めされた8桁表記（BU0xxxxxxx）。取得経路によって同じ候補者が
+# BU2488413 / BU02488413 の2表記で現れることが実運用ログで確認されている。
+_PADDED_MEMBER_NO = re.compile(r"^BU0(\d{7})$")
+
+
+def normalize_member_no(member_no: str) -> str:
+    """会員番号を正準形（ゼロ埋めなし）へ正規化する。
+
+    ビズリーチは同一候補者を「BU+7桁」と「BU+0+7桁」の2表記で返すことがあり、
+    表記ゆれのまま扱うと同じ人を別人として重複カウント・重複送信してしまう。
+    観測された「先頭ゼロ1つの8桁」だけを畳み、それ以外はそのまま返す（保守的）。
+    """
+    m = _PADDED_MEMBER_NO.match(member_no or "")
+    return f"BU{m.group(1)}" if m else member_no
 
 
 class Gender(str, Enum):
@@ -58,6 +74,13 @@ class Candidate(BaseModel):
     """ビズリーチ候補者。名前は非表示のため会員番号で識別する。"""
 
     member_no: str = Field(..., description="会員番号（例: BU3765516）")
+
+    @field_validator("member_no")
+    @classmethod
+    def _normalize(cls, v: str) -> str:
+        # 全ての取得経路（検索・ピックアップ・DB読込）で表記を統一し、
+        # 同一候補者の重複カウント・重複送信を防ぐ。
+        return normalize_member_no(v)
     age: int | None = None
     gender: Gender = Gender.unknown
     education: Education = Education.unknown

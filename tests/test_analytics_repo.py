@@ -173,6 +173,57 @@ def test_reconcile_auto_replies_promotes_and_removes_stale(tmp_path):
     repo.close()
 
 
+def test_normalize_member_no_variants():
+    from bizreach_scout.models import normalize_member_no
+
+    assert normalize_member_no("BU02488413") == "BU2488413"   # ゼロ埋め8桁 → 正準形
+    assert normalize_member_no("BU2488413") == "BU2488413"    # 既に正準形
+    assert normalize_member_no("BU00844022") == "BU0844022"   # 先頭ゼロ1つだけ畳む（保守的）
+    assert normalize_member_no("BU0844022") == "BU0844022"    # 7桁でゼロ始まりはそのまま
+    assert normalize_member_no("") == ""
+
+
+def test_candidate_model_normalizes_member_no():
+    cand = make_candidate(member_no="BU02488413")
+    assert cand.member_no == "BU2488413"
+
+
+def test_migration_merges_padded_member_duplicates(tmp_path):
+    # 同一人物が BU2488413（送信済み）と BU02488413（後日別経路で再取得・送信済み）の
+    # 2表記で存在する状態を再現 → 起動時マイグレーションで1人に統合される。
+    db = tmp_path / "t.db"
+    repo = Repository(db_path=db)
+    for mno, days in (("BU2488413", "2026-07-10T10:00:00"), ("BU02488413", "2026-07-15T10:00:00")):
+        repo.conn.execute(
+            "INSERT INTO candidates (member_no, profile_json, eligible, eligibility_failed,"
+            " created_at, updated_at) VALUES (?, '{}', 1, '', ?, ?)", (mno, days, days))
+        repo.conn.execute(
+            "INSERT INTO scouts (member_no, kind, subject, body, status, sent_at, created_at)"
+            " VALUES (?, 'first', 's', 'b', 'sent', ?, ?)", (mno, days, days))
+        repo.conn.execute(
+            "INSERT INTO sent_log (member_no, kind, sent_at, created_at)"
+            " VALUES (?, 'first', ?, ?)", (mno, days, days))
+    repo.upsert_reply("BU02488413", replied=True, replied_at=None,
+                      detected_by="auto", note="受信箱に返信（件名一致）")
+    repo.conn.commit()
+    repo.close()
+
+    repo = Repository(db_path=db)  # 再起動でマイグレーションが走る
+    # 1人に統合され、送信は古い方（7/10）が残る。
+    rows = repo.conn.execute(
+        "SELECT member_no, sent_at FROM sent_log WHERE kind='first'").fetchall()
+    assert [(r["member_no"], r["sent_at"]) for r in rows] == [
+        ("BU2488413", "2026-07-10T10:00:00")]
+    assert repo.conn.execute("SELECT COUNT(*) AS n FROM candidates").fetchone()["n"] == 1
+    # 返信はゼロ埋め側に付いていても正準形へ引き継がれる。
+    assert repo.is_replied("BU2488413") is True
+    # 再実行しても変化しない（冪等）。
+    repo._merge_padded_member_nos()
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"] == 1
+    repo.close()
+
+
 def test_meta_roundtrip(tmp_path):
     repo = Repository(db_path=tmp_path / "t.db")
     assert repo.get_meta("last_trend_at") is None
