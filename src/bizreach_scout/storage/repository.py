@@ -420,13 +420,15 @@ class Repository:
         return merged
 
     def reconcile_auto_replies(self, detected: dict[str, str]) -> tuple[int, int]:
-        """受信箱スキャンの結果を「自動検知の返信」の唯一の真実として反映する。
+        """受信箱スキャンの結果を「受信箱由来の返信」の唯一の真実として反映する。
 
-        detected: {member_no: 根拠note}。この集合を自動返信の全体とみなし、
+        detected: {member_no: 根拠note}。この集合を受信箱由来の返信の全体とみなし、
         - 未記録の会員は返信あり(auto)として昇格、
-        - 既存の auto 返信のうち今回検知されなかったものは取り消す（手動 manual は保持）。
-        受信箱には過去の返信が全て残るため、スキャンが取得できていれば当集合が正となる。
-        誤検知（例: mypageのパイプライン会員番号との一致）で付いた返信を自己修復できる。
+        - **受信箱由来（note が「受信箱」で始まる）の既存返信で今回検知されなかったものは取消**。
+        受信箱には過去の返信が全て残るため、スキャンできていれば当集合が正となる。
+        誤検知（例: mypageのパイプライン会員番号との一致や、その値がシートを往復して
+        manual 化したもの）を、detected_by に依らず note で判別して自己修復できる。
+        ユーザーの手動指定（note が「受信箱」で始まらない）やレジュメ由来の検知は残す。
         戻り値 (昇格数, 取消数)。
         """
         added = 0
@@ -438,13 +440,13 @@ class Repository:
                 self.upsert_reply(member_no, replied=True, replied_at=None,
                                   detected_by="auto", note=note)
                 added += 1
-        # 今回検知されなかった auto 返信を取り消す（manual は残す）。
+        # 受信箱由来の返信で今回検知されなかったものを取り消す（手動指定・レジュメ由来は残す）。
         stale = [r["member_no"] for r in self.conn.execute(
-            "SELECT member_no FROM replies WHERE detected_by='auto' AND replied=1"
+            "SELECT member_no FROM replies WHERE replied=1 AND note LIKE '受信箱%'"
         ).fetchall() if r["member_no"] not in detected]
         for member_no in stale:
             self.conn.execute(
-                "DELETE FROM replies WHERE member_no=? AND detected_by='auto'", (member_no,))
+                "DELETE FROM replies WHERE member_no=? AND note LIKE '受信箱%'", (member_no,))
         self.conn.commit()
         return added, len(stale)
 

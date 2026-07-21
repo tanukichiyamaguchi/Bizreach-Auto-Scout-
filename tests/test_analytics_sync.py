@@ -85,31 +85,35 @@ def test_sync_writes_all_sheets_and_checkbox_rule(tmp_path):
     assert report.charts == 6
 
 
-def test_sync_reads_manual_checks_before_rewrite(tmp_path):
+def test_sync_reads_manual_input_column_not_display_column(tmp_path):
     repo = _repo_with_sent(tmp_path)
-    # 前回の同期結果に、人が BU2 へ返信チェックを入れた状態を再現。
-    header = ["会員番号", "返信あり", "返信日", "メモ"]
+    # 前回同期のシートを再現: 表示列「返信」は自動判定の投影（読み戻さない）。
+    # 入力列「手動で返信ありにする」に人が BU2 だけチェックした状態。
+    header = ["会員番号", "返信", "返信日", "検知", "メモ", "手動で返信ありにする"]
     sheets = FakeSheets({SENT_LOG_SHEET: [
         ["注記"], header,
-        ["BU1", "FALSE", "", ""],
-        ["BU2", "TRUE", "2026-07-15", "電話面談へ"],
+        # BU1 は表示列が TRUE でも入力列は空 → 読み戻さない（往復ループ防止）。
+        ["BU1", "TRUE", "", "自動", "受信箱にメッセージあり", ""],
+        ["BU2", "FALSE", "", "", "", "TRUE"],
     ]})
     report = sync_analytics(repo, sheets, now=datetime(2026, 7, 16, 12, 0),
                             with_charts=False, trend_fn=None)
+    # 取り込まれるのは入力列にチェックのある BU2 のみ（BU1 の表示 TRUE は無視）。
     assert report.manual_merged == 1
     assert report.replied == 1
-    # 書き換え後のシートにも返信状態が反映されている（会員番号キーで引き継ぎ）。
-    log = sheets.data[SENT_LOG_SHEET]
-    header_idx = next(i for i, row in enumerate(log) if "会員番号" in row)
-    replied_col = log[header_idx].index("返信あり")
-    note_col = log[header_idx].index("メモ")
-    by_member = {row[0]: row for row in log[header_idx + 1:]}
-    assert by_member["BU2"][replied_col] is True
-    assert by_member["BU2"][note_col] == "電話面談へ"
-    assert by_member["BU1"][replied_col] is False
-    # DB 側にも manual として記録されている。
+    # DB には BU2 が manual として記録され、BU1 は返信なしのまま。
     row = repo.conn.execute("SELECT * FROM replies WHERE member_no='BU2'").fetchone()
     assert row["replied"] == 1 and row["detected_by"] == "manual"
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM replies WHERE member_no='BU1'").fetchone()["n"] == 0
+    # 書き換え後: 入力列は常に空、表示列は DB を反映。
+    log = sheets.data[SENT_LOG_SHEET]
+    header_idx = next(i for i, row in enumerate(log) if "会員番号" in row)
+    disp_col = log[header_idx].index("返信")
+    input_col = log[header_idx].index("手動で返信ありにする")
+    by_member = {row[0]: row for row in log[header_idx + 1:]}
+    assert by_member["BU2"][disp_col] is True
+    assert by_member["BU2"][input_col] == ""      # 入力列は取り込み後クリア
     repo.close()
 
 
@@ -154,12 +158,14 @@ def test_trend_skipped_when_too_few_sends(tmp_path):
     repo.close()
 
 
-def test_read_manual_entries_handles_note_row_and_missing_columns():
-    # 注記行があってもヘッダーを特定できる。
+def test_read_manual_entries_reads_only_input_column():
+    # 注記行があってもヘッダーを特定でき、入力列だけを読む。
     rows = [["自動更新の注記"],
-            ["会員番号", "氏名", "返信あり", "返信日", "メモ"],
-            ["BU9", "山田", "TRUE", "7/15", "ok"]]
-    assert read_manual_entries(rows) == [("BU9", True, "7/15", "ok")]
-    # ヘッダーが見つからなければ空。
+            ["会員番号", "氏名", "返信", "メモ", "手動で返信ありにする"],
+            ["BU9", "山田", "FALSE", "受信箱にメッセージあり", "TRUE"],   # 入力列TRUE → 取り込む
+            ["BU8", "田中", "TRUE", "受信箱に返信（件名一致）", ""]]        # 表示TRUEだが入力空 → 無視
+    assert read_manual_entries(rows) == [("BU9", True, "", "手動")]
+    # 入力列が無い（旧レイアウト）なら空。往復ループを起こさない。
+    assert read_manual_entries([["会員番号", "返信あり"], ["BU1", "TRUE"]]) == []
     assert read_manual_entries([["foo", "bar"]]) == []
     assert read_manual_entries([]) == []

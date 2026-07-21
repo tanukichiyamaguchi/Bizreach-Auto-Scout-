@@ -33,10 +33,16 @@ SENT_LOG_HEADER = [
     "会員番号", "氏名", "初回送信日", "曜日", "再送日", "送信枠", "トーン",
     "年齢", "年齢帯", "性別", "学歴", "大学", "現職企業", "役職",
     "転職回数", "現職在籍年数", "想定年収", "会員クラス", "ステータス", "本文字数",
-    "返信あり", "返信日", "検知", "メモ",
+    # 「返信」は自動判定の表示（DBの投影・毎回上書き。手入力しても保持されない）。
+    # 「手動で返信ありにする」だけが入力チャネル（チェックすると次回同期でDBへ反映）。
+    "返信", "返信日", "検知", "メモ", "手動で返信ありにする",
 ]
-SENT_LOG_NOTE = ("このシートは自動更新されます。手動編集が保持されるのは"
-                 "「返信あり」「返信日」「メモ」列のみです。")
+# 入力として読み戻すのは「手動で返信ありにする」列だけ。この列は自動判定では書き込まず
+# 常に空にする（＝自分が書いた値を manual として読み戻す往復ループを防ぐ）。
+MANUAL_INPUT_COL = "手動で返信ありにする"
+SENT_LOG_NOTE = ("このシートは自動更新されます。返信は自動検知され「返信」列に反映されます。"
+                 "自動で拾えていない返信を手で足したい時だけ「手動で返信ありにする」列に"
+                 "チェックを入れてください（次回同期でDBへ取り込まれます）。")
 
 # セグメント分析シート: 各表を固定アンカー行に書く（チャートの参照範囲を安定させる）。
 SEGMENT_BLOCK_ROWS = 13  # 表タイトル1 + ヘッダー1 + データ最大9 + 空行2
@@ -73,29 +79,29 @@ def _find_col(header: list[str], name: str) -> int:
 
 
 def read_manual_entries(rows: list[list[str]]) -> list[tuple[str, bool, str, str]]:
-    """既存の送信ログシートから (会員番号, 返信あり, 返信日, メモ) を抽出する。
+    """既存の送信ログシートから手動入力の返信 (会員番号, checked, "", "手動") を抽出する。
 
-    ヘッダー行は「会員番号」を含む行を探して特定する（先頭の注記行に依存しない）。
+    読み戻すのは入力専用列「手動で返信ありにする」のみ。自動判定の表示列「返信」は
+    自分が書いた値なので読み戻さない（往復して manual に化ける誤検知を防ぐ）。
+    手動エントリの note は固定で「手動」とし、受信箱由来（note が「受信箱…」）の自動修復
+    対象と明確に区別する。ヘッダー行は「会員番号」を含む行を探して特定する。
     """
     header_idx = next((i for i, row in enumerate(rows[:5]) if "会員番号" in row), -1)
     if header_idx < 0:
         return []
     header = rows[header_idx]
     c_member = _find_col(header, "会員番号")
-    c_replied = _find_col(header, "返信あり")
-    c_replied_at = _find_col(header, "返信日")
-    c_note = _find_col(header, "メモ")
-    if c_member < 0 or c_replied < 0:
+    c_manual = _find_col(header, MANUAL_INPUT_COL)
+    if c_member < 0 or c_manual < 0:
         return []
     out: list[tuple[str, bool, str, str]] = []
     for row in rows[header_idx + 1:]:
         member = row[c_member].strip() if c_member < len(row) else ""
         if not member:
             continue
-        checked = (row[c_replied].strip().upper() == "TRUE") if c_replied < len(row) else False
-        replied_at = row[c_replied_at].strip() if 0 <= c_replied_at < len(row) else ""
-        note = row[c_note].strip() if 0 <= c_note < len(row) else ""
-        out.append((member, checked, replied_at, note))
+        checked = (row[c_manual].strip().upper() == "TRUE") if c_manual < len(row) else False
+        if checked:
+            out.append((member, True, "", "手動"))
     return out
 
 
@@ -125,10 +131,11 @@ def _sent_log_rows(records: list[SentRecord]) -> list[list[object]]:
             r.candidate_class,
             r.status_flags,
             r.body_len if r.body_len is not None else "",
-            bool(r.replied),
+            bool(r.replied),                       # 返信（表示・DBの投影）
             _fmt_dt(r.replied_at) or (r.replied_at or ""),
             {"auto": "自動", "manual": "手動"}.get(r.detected_by, r.detected_by),
             r.note,
+            "",                                    # 手動で返信ありにする（入力専用・常に空で出す）
         ])
     return rows
 
@@ -166,11 +173,11 @@ def _segment_rows(tables: list[SegmentTable]) -> list[list[object]]:
 
 
 def _checkbox_validation_request(sheet_id: int, n_members: int) -> dict:
-    """送信ログの「返信あり」列にチェックボックスの入力規則を適用する。
+    """送信ログの入力列「手動で返信ありにする」にチェックボックスの入力規則を適用する。
 
     行構成は 注記(0) / ヘッダー(1) / データ(2〜) の 0-based 前提。
     """
-    col = SENT_LOG_HEADER.index("返信あり")
+    col = SENT_LOG_HEADER.index(MANUAL_INPUT_COL)
     return {
         "setDataValidation": {
             "range": {

@@ -154,18 +154,22 @@ def test_unreplied_sent_orders_oldest_first_and_limits(tmp_path):
 
 def test_reconcile_auto_replies_promotes_and_removes_stale(tmp_path):
     repo = Repository(db_path=tmp_path / "t.db")
-    repo.upsert_reply("BU_STALE", replied=True, replied_at=None, detected_by="auto")
-    repo.upsert_reply("BU_MANUAL", replied=True, replied_at=None, detected_by="manual")
-    added, removed = repo.reconcile_auto_replies(
-        {"BU_NEW": "受信箱に返信（件名一致）", "BU_MANUAL": "重複検知"})
-    assert added == 1                      # BU_NEW を昇格（BU_MANUAL は既に返信済み）
-    assert removed == 1                    # BU_STALE を取消
+    # 受信箱由来（note が「受信箱…」）の既存返信。今回検知されなければ取り消す。
+    repo.upsert_reply("BU_STALE", replied=True, replied_at=None, detected_by="auto",
+                      note="受信箱にメッセージあり")
+    # シート往復で manual 化した誤検知も、note で受信箱由来と判別して取り消す。
+    repo.upsert_reply("BU_ROUNDTRIP", replied=True, replied_at=None, detected_by="manual",
+                      note="受信箱にメッセージあり")
+    # ユーザーの手動指定（note が「受信箱…」でない）は残す。
+    repo.upsert_reply("BU_MANUAL", replied=True, replied_at=None, detected_by="manual",
+                      note="手動")
+    added, removed = repo.reconcile_auto_replies({"BU_NEW": "受信箱に返信（件名一致）"})
+    assert added == 1                      # BU_NEW を昇格
+    assert removed == 2                    # BU_STALE と BU_ROUNDTRIP を取消
     assert repo.is_replied("BU_NEW") is True
-    assert repo.is_replied("BU_STALE") is False       # auto の誤検知は消える
-    assert repo.is_replied("BU_MANUAL") is True        # manual は残る
-    row = repo.conn.execute(
-        "SELECT detected_by FROM replies WHERE member_no='BU_MANUAL'").fetchone()
-    assert row["detected_by"] == "manual"
+    assert repo.is_replied("BU_STALE") is False
+    assert repo.is_replied("BU_ROUNDTRIP") is False    # manual でも受信箱由来なら消える
+    assert repo.is_replied("BU_MANUAL") is True         # 真の手動指定は残る
     repo.close()
 
 
