@@ -80,20 +80,23 @@ def body_shape(html: str, limit: int = 6000) -> str:
 
 # 詳細リンクから除外する「一覧・操作系」URLのパターン。
 _NON_DETAIL_LINK = re.compile(
-    r"folderCd=|pageSize=|logout|\.css|\.js|\.ico|javascript:|^#|^mailto:", re.I)
+    r"folderCd=|pageSize=|logout|\.css|\.js|\.ico|javascript:|^#|^mailto:"
+    r"|/message/?$|/message/template", re.I)
+# 「候補者の詳細/スレッド」に遷移しそうなリンクのキーワード（受信箱の行→候補者）。
+_DETAIL_KW = re.compile(r"message|candidate|resume|detail|thread|scout|mrcc|talk", re.I)
 
 
 def extract_message_links(html: str, base: str, limit: int = 30) -> list[str]:
-    """受信箱HTMLからメッセージ詳細らしいリンクを抽出する（純関数）。
+    """受信箱HTMLから候補者スレッド/詳細らしいリンクを抽出する（純関数）。
 
-    一覧行の遷移先（メッセージ詳細）には候補者の識別子が含まれる可能性が高い。
-    フォルダ切替・ページ送りなどの一覧系リンクは除外し、重複なしで最大 limit 件。
+    一覧行の遷移先（候補者スレッド）には mrccid など識別子が含まれる可能性が高い。
+    メニュー（/message/・/message/template）やフォルダ切替・アセットは除外する。
     """
     base = base.rstrip("/")
     seen: set[str] = set()
     out: list[str] = []
     for href in re.findall(r'href="([^"]+)"', html or ""):
-        if "message" not in href.lower() or _NON_DETAIL_LINK.search(href):
+        if not _DETAIL_KW.search(href) or _NON_DETAIL_LINK.search(href):
             continue
         url = href if href.startswith("http") else base + "/" + href.lstrip("/")
         if not url.startswith(base):
@@ -101,6 +104,40 @@ def extract_message_links(html: str, base: str, limit: int = 30) -> list[str]:
         if url not in seen:
             seen.add(url)
             out.append(url)
+        if len(out) >= limit:
+            break
+    return out
+
+
+# DOM から拾う「リンク/クリック信号」属性（Angularの ng-click / data-* も対象）。
+_SIGNAL_ATTR = re.compile(
+    r'(?:href|ng-href|ng-click|onclick|data-[\w-]+|data-url)="([^"]{3,200})"', re.I)
+# 候補者ID/mrccid らしい長い英数字トークン。
+_ID_TOKEN = re.compile(r"[A-Za-z0-9_-]{18,28}")
+
+
+def extract_dom_signals(html: str, limit: int = 50) -> list[str]:
+    """DOMから候補者スレッド遷移らしい属性値（href/ng-click/data-*）を抽出（純関数）。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _SIGNAL_ATTR.finditer(html or ""):
+        v = m.group(1).strip()
+        if _DETAIL_KW.search(v) and v not in seen:
+            seen.add(v)
+            out.append(v)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def extract_id_tokens(html: str, limit: int = 60) -> list[str]:
+    """DOM中のmrccid様トークン（長い英数字）を重複なしで抽出（純関数・診断用）。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in _ID_TOKEN.findall(html or ""):
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
         if len(out) >= limit:
             break
     return out

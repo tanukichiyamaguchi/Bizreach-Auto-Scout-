@@ -76,6 +76,31 @@ def test_api_index_lists_endpoints_and_redacts_values():
     assert "山田" not in out
 
 
+def test_extract_dom_signals_picks_thread_attrs_not_chrome():
+    from bizreach_scout.bizreach.inbox import extract_dom_signals
+
+    html = (
+        '<tr ng-click="openThread(12345)"><td>氏名A</td></tr>'
+        '<a href="/resume/wV9gfdXhxbDLyqVcHQ/detail">履歴書</a>'
+        '<a data-url="/candidate/detail?mrccid=abc123def456ghi789">見る</a>'
+        '<a ng-click="logout()">ログアウト</a>'   # 無関係 → 拾わない
+    )
+    sigs = extract_dom_signals(html)
+    assert any("openThread" in s for s in sigs)
+    assert any("/resume/" in s for s in sigs)
+    assert any("mrccid=" in s for s in sigs)
+    assert not any("logout" in s for s in sigs)
+
+
+def test_extract_id_tokens_finds_mrccid_like_tokens():
+    from bizreach_scout.bizreach.inbox import extract_id_tokens
+
+    html = '<a href="/resume/wV9gfdXhxbDLyqVcHQJvXQ">x</a> short abc def'
+    toks = extract_id_tokens(html)
+    assert "wV9gfdXhxbDLyqVcHQJvXQ" in toks
+    assert "short" not in toks  # 18文字未満は拾わない
+
+
 def test_api_index_excludes_static_assets():
     from bizreach_scout.bizreach.inbox import api_index
 
