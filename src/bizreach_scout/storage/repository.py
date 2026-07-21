@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS sent_log (
     status_flags TEXT NOT NULL DEFAULT '',
     backfilled INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
+    reply_checked_at TEXT,               -- 返信自動チェックの最終実施時刻（ローテーション用）
     UNIQUE(member_no, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_sent_log_sent_at ON sent_log(sent_at);
@@ -118,6 +119,8 @@ class Repository:
             self.conn.execute(
                 "ALTER TABLE scouts ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
             )
+        with contextlib.suppress(sqlite3.OperationalError):
+            self.conn.execute("ALTER TABLE sent_log ADD COLUMN reply_checked_at TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -418,7 +421,13 @@ class Repository:
 
     def unreplied_sent(self, *, recent_days: int, now: datetime | None = None,
                        limit: int = 60) -> list[sqlite3.Row]:
-        """自動返信チェックの対象: 未返信かつ初回送信が recent_days 以内（古い順）。"""
+        """自動返信チェックの対象: 未返信かつ初回送信が recent_days 以内。
+
+        ローテーション順（未チェック → 最も昔にチェックした順）で返す。
+        以前は送信古い順の固定だったため、上限（60件/回）を超える送信数になると
+        毎回同じ最古の候補者だけを再チェックし続け、それ以降に送った候補者の返信を
+        永遠に見逃すバグがあった（同順位は送信古い順）。
+        """
         now = now or datetime.now()
         cutoff = (now - timedelta(days=recent_days)).isoformat(timespec="seconds")
         return self.conn.execute(
@@ -428,11 +437,45 @@ class Repository:
             LEFT JOIN replies rp ON rp.member_no = f.member_no
             WHERE f.kind='first' AND f.sent_at >= ?
               AND COALESCE(rp.replied, 0) = 0
-            ORDER BY f.sent_at ASC
+            ORDER BY COALESCE(f.reply_checked_at, '') ASC, f.sent_at ASC
             LIMIT ?
             """,
             (cutoff, limit),
         ).fetchall()
+
+    def mark_reply_checked(self, member_no: str) -> None:
+        """返信チェック実施をローテーション用に記録する。"""
+        self.conn.execute(
+            "UPDATE sent_log SET reply_checked_at=? WHERE member_no=? AND kind='first'",
+            (_now_iso(), member_no),
+        )
+        self.conn.commit()
+
+    def is_replied(self, member_no: str) -> bool:
+        row = self.conn.execute(
+            "SELECT replied FROM replies WHERE member_no=?", (member_no,)
+        ).fetchone()
+        return bool(row and row["replied"])
+
+    def sent_members_with_mrccid(self) -> list[tuple[str, str]]:
+        """送信済み全候補者の (member_no, mrccid) を返す（受信箱スキャンの照合用）。"""
+        rows = self.conn.execute(
+            """
+            SELECT f.member_no, c.profile_json
+            FROM sent_log f
+            LEFT JOIN candidates c ON c.member_no = f.member_no
+            WHERE f.kind='first'
+            GROUP BY f.member_no
+            """
+        ).fetchall()
+        out: list[tuple[str, str]] = []
+        for r in rows:
+            mrccid = ""
+            if r["profile_json"]:
+                with contextlib.suppress(Exception):
+                    mrccid = json.loads(r["profile_json"]).get("mrccid") or ""
+            out.append((r["member_no"], mrccid))
+        return out
 
     def get_meta(self, key: str) -> str | None:
         row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()

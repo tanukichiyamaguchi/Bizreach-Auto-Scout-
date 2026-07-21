@@ -79,6 +79,79 @@ def test_sync_replies_respects_max_checks_oldest_first(tmp_path):
     repo.close()
 
 
+class FakeScanner:
+    """InboxScanner のスタブ（fetch_pages が固定HTMLを返す）。"""
+
+    def __init__(self, htmls: list[str]):
+        self.htmls = htmls
+
+    def fetch_pages(self, max_pages: int = 5, page_size: int = 50) -> list[str]:
+        return self.htmls
+
+
+def test_sync_replies_detects_from_inbox_scan(tmp_path):
+    repo = _repo_with_sent(tmp_path, [("BU1111111", 3), ("BU2222222", 5)])
+    # 受信箱に BU1111111 のメッセージがある（= 返信あり）。BU9999999 は送信していない他者。
+    scanner = FakeScanner(['<tr><td>BU1111111</td><td>2026/07/19</td></tr>',
+                           '<tr><td>BU9999999</td></tr>'])
+    api = FakeApi({"M-BU1111111": _resume(), "M-BU2222222": _resume()})
+    report = sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    assert report.inbox_pages == 2
+    assert report.inbox_detected == 1
+    row = repo.conn.execute("SELECT * FROM replies WHERE member_no='BU1111111'").fetchone()
+    assert row["replied"] == 1 and row["detected_by"] == "auto"
+    assert "受信箱" in row["note"]
+    # 受信箱で返信ありになった候補者はレジュメ再確認の対象から外れる。
+    assert "M-BU1111111" not in api.calls
+    # 送信していない BU9999999 は記録されない。
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM replies WHERE member_no='BU9999999'").fetchone()["n"] == 0
+    repo.close()
+
+
+def test_sync_replies_inbox_mrccid_match_and_idempotent(tmp_path):
+    repo = _repo_with_sent(tmp_path, [("BU1111111", 3)])
+    # 会員番号は画面に出ず、mrccid（M-BU1111111）だけがリンクに現れるケース。
+    scanner = FakeScanner(['<a href="/candidates/M-BU1111111/detail">氏名</a>'])
+    api = FakeApi({"M-BU1111111": _resume()})
+    r1 = sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    assert r1.inbox_detected == 1
+    # 2回目は既に返信済みのため新規検知0（冪等）。
+    r2 = sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    assert r2.inbox_detected == 0
+    repo.close()
+
+
+def test_sync_replies_inbox_failure_does_not_block_resume_checks(tmp_path):
+    repo = _repo_with_sent(tmp_path, [("BU1", 3)])
+
+    class BoomScanner:
+        def fetch_pages(self, max_pages=5, page_size=50):
+            raise RuntimeError("navigation failed")
+
+    api = FakeApi({"M-BU1": _resume(name="山田 太郎")})
+    report = sync_replies(api, repo, max_checks=10, recent_days=45, scanner=BoomScanner())
+    assert report.errors == 1
+    assert report.detected == 1  # レジュメ側の検知は動く
+    repo.close()
+
+
+def test_sync_replies_rotates_targets_across_runs(tmp_path):
+    # 送信4名・1回の上限2名 → 1回目は古い2名、2回目は残りの2名（毎回同じ2名を
+    # 見続けて新しい送信の返信を永遠に見逃す、という以前のバグの回帰テスト）。
+    repo = _repo_with_sent(
+        tmp_path, [("BU_A", 40), ("BU_B", 30), ("BU_C", 20), ("BU_D", 10)])
+    api = FakeApi({f"M-{m}": _resume() for m in ("BU_A", "BU_B", "BU_C", "BU_D")})
+    sync_replies(api, repo, max_checks=2, recent_days=45)
+    assert api.calls == ["M-BU_A", "M-BU_B"]
+    sync_replies(api, repo, max_checks=2, recent_days=45)
+    assert api.calls[2:] == ["M-BU_C", "M-BU_D"]
+    # 3回目は一巡して最初にチェックした2名へ戻る。
+    sync_replies(api, repo, max_checks=2, recent_days=45)
+    assert api.calls[4:] == ["M-BU_A", "M-BU_B"]
+    repo.close()
+
+
 def test_sync_replies_skips_already_replied_and_survives_errors(tmp_path):
     repo = _repo_with_sent(tmp_path, [("BU1", 3), ("BU2", 4)])
     repo.upsert_reply("BU1", replied=True, replied_at=None, detected_by="manual")
