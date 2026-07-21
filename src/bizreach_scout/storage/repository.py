@@ -477,6 +477,19 @@ class Repository:
             out.append((r["member_no"], mrccid))
         return out
 
+    def sent_subjects(self) -> list[tuple[str, str]]:
+        """送信済みスカウトの (member_no, 件名) を返す（受信箱の件名照合用）。
+
+        受信箱の返信は「Re: <送信した件名>」で並び、件名は候補者ごとに個別生成の
+        一点物のため、会員番号が画面に出なくても件名で送信済み候補者と突合できる。
+        first / resend 両方の件名を対象にする（どちらへの返信もあり得る）。
+        """
+        rows = self.conn.execute(
+            "SELECT member_no, subject FROM scouts "
+            "WHERE status='sent' AND subject != ''"
+        ).fetchall()
+        return [(r["member_no"], r["subject"]) for r in rows]
+
     def get_meta(self, key: str) -> str | None:
         row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return row["value"] if row else None
