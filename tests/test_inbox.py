@@ -76,6 +76,22 @@ def test_api_index_lists_endpoints_and_redacts_values():
     assert "山田" not in out
 
 
+def test_api_index_excludes_static_assets():
+    from bizreach_scout.bizreach.inbox import api_index
+
+    responses = [
+        ("https://cr-support.jp/dwr/engine.js?v=1", "x" * 50000),   # ライブラリ → 除外
+        ("https://cr-support.jp/css/general.css?v=1", "y" * 40000),  # → 除外
+        ("https://cr-support.jp/dwr/call/plaincall/crsAjaxMessage.list.dwr",
+         'var s0={"mrccid":"M-BU1"};'),                              # データ応答 → 残す
+    ]
+    out = api_index(responses)
+    assert "crsAjaxMessage.list.dwr" in out
+    assert "engine.js" not in out and "general.css" not in out
+    # 非JSON(DWR)応答は英数字トークンで様子が見える。
+    assert "mrccid" in out
+
+
 def test_body_shape_strips_head_script_style():
     from bizreach_scout.bizreach.inbox import body_shape
 
