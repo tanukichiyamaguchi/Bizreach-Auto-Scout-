@@ -104,6 +104,22 @@ def test_match_subjects_full_and_truncated_and_ambiguous():
     assert match_subjects("", pairs) == set()
 
 
+def test_page_signature_distinguishes_pages_and_detects_empty():
+    from bizreach_scout.bizreach.inbox import page_signature
+
+    p1 = ('<tr><td>高澤 拓也</td><td>Re: 【Premium Offer】5店舗の立て直しと…</td></tr>'
+          '<tr><td>BU02553603</td></tr>')
+    p2 = '<tr><td>鈴木 一郎</td><td>Re: 【カジュアル面談について】経営戦略研究所</td></tr>'
+    empty = '<div class="messageList"></div>'
+    s1, s2 = page_signature(p1), page_signature(p2)
+    assert s1 and s2 and s1 != s2          # 別ページは別署名
+    assert page_signature(p1) == s1        # 決定的
+    assert page_signature(empty) == frozenset()   # 空ページ＝空署名（末尾判定に使う）
+    # 会員番号と Re:件名の両方を目印にする。
+    assert any("BU02553603" in m for m in s1)
+    assert any(m.startswith("Re") for m in s1)
+
+
 def test_extract_dom_signals_picks_thread_attrs_not_chrome():
     from bizreach_scout.bizreach.inbox import extract_dom_signals
 
