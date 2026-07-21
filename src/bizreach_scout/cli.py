@@ -354,9 +354,10 @@ def analytics_report() -> None:
               help="1回で確認する最大人数（既定は BIZSCOUT_REPLY_CHECK_MAX）")
 @click.option("--headless/--no-headless", default=True)
 def sync_replies_cmd(max_checks: int | None, headless: bool) -> None:
-    """送信済み・未返信の候補者のレジュメを再取得し、返信を自動検知してDBへ記録する。"""
+    """受信箱スキャンとレジュメ再取得で返信を自動検知し、DBへ記録する。"""
     from .analytics.reply_sync import sync_replies
     from .bizreach.api import BizreachApi
+    from .bizreach.inbox import InboxScanner
 
     settings = get_settings()
     with _bizreach_client(headless) as client:
@@ -368,6 +369,7 @@ def sync_replies_cmd(max_checks: int | None, headless: bool) -> None:
                 max_checks=max_checks or settings.reply_check_max,
                 recent_days=settings.reply_recent_days,
                 client=client,
+                scanner=InboxScanner(client),
             )
             click.echo(report.summary())
         finally:
