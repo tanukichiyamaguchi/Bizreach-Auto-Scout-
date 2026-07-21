@@ -229,9 +229,32 @@ class InboxScanner:
         """捕捉したAPI応答本文の連結（識別子の部分文字列照合用）。"""
         return "\n".join(b for _u, b in self.responses)
 
+    def _bootstrap(self) -> None:
+        """mypage を開いてSPA/認証コンテキストを初期化する。
+
+        メッセージ画面へ直接 goto すると DWR のメッセージ一覧取得が発火しないため、
+        まず mypage を開いてアプリを起動してから遷移する（偵察で有効だった経路）。
+        """
+        page = self.client.page
+        with contextlib.suppress(Exception):
+            page.goto(f"{self.base}/mypage/", wait_until="domcontentloaded")
+            with contextlib.suppress(Exception):
+                page.wait_for_load_state("networkidle", timeout=15000)
+            self.client.human_delay(1.5, 2.5)
+            # メッセージへのリンクがあればクリックして一覧を発火させる。
+            for text in ("メッセージ", "受信", "返信"):
+                with contextlib.suppress(Exception):
+                    loc = page.locator(f"text={text}").first
+                    if loc.count() > 0:
+                        loc.click(timeout=5000)
+                        with contextlib.suppress(Exception):
+                            page.wait_for_load_state("networkidle", timeout=10000)
+                        self.client.human_delay(1.0, 2.0)
+
     def fetch_pages(self, max_pages: int = 5, page_size: int = 50) -> list[str]:
         self._install_capture()
         page = self.client.page
+        self._bootstrap()
         htmls: list[str] = []
         for n in range(1, max_pages + 1):
             url = (f"{self.base}/message/?pageSize={page_size}&folderCd=inbox"
@@ -240,11 +263,11 @@ class InboxScanner:
                 page.goto(url, wait_until="domcontentloaded")
                 with contextlib.suppress(Exception):
                     page.wait_for_load_state("networkidle", timeout=10000)
-                # SPA(DWR)がメッセージ一覧をAJAXで取りに行くのを待ってから本文を読む。
+                # SPA(DWR)がメッセージ一覧をAJAXで取りに行くのを待つ（crsAjaxMessage）。
                 with contextlib.suppress(Exception):
                     page.wait_for_response(
-                        lambda r: "/dwr/call/" in r.url or "/message" in r.url.lower(),
-                        timeout=8000)
+                        lambda r: "crsAjaxMessage" in r.url or "/dwr/call/" in r.url,
+                        timeout=10000)
                 self.client.human_delay(3.0, 4.0)
                 html = page.content()
             except Exception as e:
