@@ -42,6 +42,36 @@ def test_find_sent_in_html_ignores_short_mrccid_and_empty():
     assert find_sent_in_html("", [("BU1", "mrccid-long-enough")]) == set()
 
 
+def test_extract_message_links_filters_and_absolutizes():
+    from bizreach_scout.bizreach.inbox import extract_message_links
+
+    html = (
+        '<a href="/message/detail?messageId=101">A</a>'
+        '<a href="/message/detail?messageId=101">A再掲</a>'
+        '<a href="/message/?pageSize=20&folderCd=inbox&currentPageNo=2">次へ</a>'
+        '<a href="https://cr-support.jp/message/detail?messageId=102">B</a>'
+        '<a href="https://evil.example.com/message/detail?messageId=9">外部</a>'
+        '<a href="/css/message.css">css</a>'
+    )
+    links = extract_message_links(html, "https://cr-support.jp")
+    assert links == [
+        "https://cr-support.jp/message/detail?messageId=101",
+        "https://cr-support.jp/message/detail?messageId=102",
+    ]
+    assert extract_message_links("", "https://cr-support.jp") == []
+
+
+def test_body_shape_strips_head_script_style():
+    from bizreach_scout.bizreach.inbox import body_shape
+
+    html = ("<html><head><title>メッセージ</title><script>var x=1;</script></head>"
+            "<body><style>.a{}</style><div class='row'>山田 太郎 BU3765516</div></body></html>")
+    shaped = body_shape(html)
+    assert "title" not in shaped and "var x=1" not in shaped and ".a{}" not in shaped
+    assert "BU3765516" in shaped and "class='row'" in shaped
+    assert "山田" not in shaped
+
+
 def test_ascii_shape_hides_japanese_keeps_structure():
     shaped = ascii_shape('<td class="name">山田 太郎</td><td>BU3765516 2026/07/19</td>')
     assert "山田" not in shaped

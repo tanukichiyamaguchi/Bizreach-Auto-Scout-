@@ -65,6 +65,47 @@ def ascii_shape(text: str, limit: int = 2000) -> str:
     return shaped[:limit]
 
 
+def body_shape(html: str, limit: int = 6000) -> str:
+    """<head>・script・style を除いた本文のみのPIIなし構造表現（純関数）。
+
+    受信箱はSPA殻の <head> が巨大で、先頭切り出しだと本文（メッセージ一覧）が
+    ダイジェストに入らないため、本文だけを対象にする。
+    """
+    body = re.sub(r"(?is)<head\b.*?</head>", "", html or "")
+    body = re.sub(r"(?is)<script\b.*?</script>", "", body)
+    body = re.sub(r"(?is)<style\b.*?</style>", "", body)
+    body = re.sub(r"\s*\n\s*", "\n", body)
+    return ascii_shape(body, limit)
+
+
+# 詳細リンクから除外する「一覧・操作系」URLのパターン。
+_NON_DETAIL_LINK = re.compile(
+    r"folderCd=|pageSize=|logout|\.css|\.js|\.ico|javascript:|^#|^mailto:", re.I)
+
+
+def extract_message_links(html: str, base: str, limit: int = 30) -> list[str]:
+    """受信箱HTMLからメッセージ詳細らしいリンクを抽出する（純関数）。
+
+    一覧行の遷移先（メッセージ詳細）には候補者の識別子が含まれる可能性が高い。
+    フォルダ切替・ページ送りなどの一覧系リンクは除外し、重複なしで最大 limit 件。
+    """
+    base = base.rstrip("/")
+    seen: set[str] = set()
+    out: list[str] = []
+    for href in re.findall(r'href="([^"]+)"', html or ""):
+        if "message" not in href.lower() or _NON_DETAIL_LINK.search(href):
+            continue
+        url = href if href.startswith("http") else base + "/" + href.lstrip("/")
+        if not url.startswith(base):
+            continue  # 外部サイトは対象外
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+        if len(out) >= limit:
+            break
+    return out
+
+
 class InboxScanner:
     """受信箱のHTMLをページ送りしながら取得する（読み取りのみ・実送信なし）。"""
 
@@ -92,4 +133,33 @@ class InboxScanner:
             if f"currentPageNo={n + 1}" not in html:
                 break
         logger.info("受信箱を %d ページ取得しました。", len(htmls))
+        return htmls
+
+    def fetch_detail_pages(self, list_htmls: list[str],
+                           max_details: int = 30) -> list[str]:
+        """受信箱一覧からメッセージ詳細ページを開いてHTMLを集める。
+
+        一覧行には候補者の氏名しか出ず識別子が無いことがあるため、
+        詳細ページ（スレッド画面。会員番号・レジュメへのリンクが出る）で照合する。
+        """
+        links: list[str] = []
+        seen: set[str] = set()
+        for html in list_htmls:
+            for url in extract_message_links(html, self.base, limit=max_details):
+                if url not in seen:
+                    seen.add(url)
+                    links.append(url)
+        links = links[:max_details]
+        page = self.client.page
+        htmls: list[str] = []
+        for url in links:
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                with contextlib.suppress(Exception):
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                self.client.human_delay(1.0, 2.0)
+                htmls.append(page.content())
+            except Exception as e:
+                logger.warning("メッセージ詳細の取得に失敗: %s", e)
+        logger.info("メッセージ詳細を %d/%d 件取得しました。", len(htmls), len(links))
         return htmls
