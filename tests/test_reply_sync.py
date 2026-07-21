@@ -80,13 +80,20 @@ def test_sync_replies_respects_max_checks_oldest_first(tmp_path):
 
 
 class FakeScanner:
-    """InboxScanner のスタブ（fetch_pages が固定HTMLを返す）。"""
+    """InboxScanner のスタブ（fetch_pages / fetch_detail_pages が固定HTMLを返す）。"""
 
-    def __init__(self, htmls: list[str]):
+    def __init__(self, htmls: list[str], detail_htmls: list[str] | None = None):
         self.htmls = htmls
+        self.detail_htmls = detail_htmls or []
+        self.detail_called = 0
+        self.base = "https://cr-support.jp"
 
     def fetch_pages(self, max_pages: int = 5, page_size: int = 50) -> list[str]:
         return self.htmls
+
+    def fetch_detail_pages(self, list_htmls, max_details: int = 30) -> list[str]:
+        self.detail_called += 1
+        return self.detail_htmls
 
 
 def test_sync_replies_detects_from_inbox_scan(tmp_path):
@@ -106,6 +113,26 @@ def test_sync_replies_detects_from_inbox_scan(tmp_path):
     # 送信していない BU9999999 は記録されない。
     assert repo.conn.execute(
         "SELECT COUNT(*) AS n FROM replies WHERE member_no='BU9999999'").fetchone()["n"] == 0
+    # 一覧でヒットしたので詳細ページまでは開かない。
+    assert scanner.detail_called == 0
+    repo.close()
+
+
+def test_sync_replies_falls_back_to_detail_pages_when_list_has_no_ids(tmp_path):
+    # 一覧行は氏名表示のみ（識別子なし・2026-07-21 実データで確認した画面仕様）。
+    # 詳細ページに会員番号が出るケース: 詳細照合で検知できる。
+    repo = _repo_with_sent(tmp_path, [("BU1111111", 3), ("BU2222222", 5)])
+    list_html = ('<div class="msgRow"><a href="/message/detail?messageId=101">氏名A</a></div>'
+                 '<div class="msgRow"><a href="/message/detail?messageId=102">氏名B</a></div>')
+    detail_htmls = ['<div class="thread">会員番号: BU1111111 <p>返信本文</p></div>']
+    scanner = FakeScanner([list_html], detail_htmls)
+    api = FakeApi({"M-BU1111111": _resume(), "M-BU2222222": _resume()})
+    report = sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    assert scanner.detail_called == 1
+    assert report.inbox_details == 1
+    assert report.inbox_detected == 1
+    row = repo.conn.execute("SELECT * FROM replies WHERE member_no='BU1111111'").fetchone()
+    assert row["replied"] == 1 and row["detected_by"] == "auto"
     repo.close()
 
 
