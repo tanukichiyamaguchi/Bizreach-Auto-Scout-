@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from ..bizreach.inbox import (
     api_index,
     body_shape,
+    extract_dom_signals,
+    extract_id_tokens,
     extract_message_links,
     find_sent_in_html,
 )
@@ -75,6 +77,15 @@ def _log_structure_digest(scanner, list_htmls: list[str], detail_htmls: list[str
             logger.info("受信箱本文の構造(%d): %s", i, chunk)
     logger.info("受信箱の詳細リンク候補（最大10件）: %s",
                 extract_message_links(first, base, limit=10))
+    # DOMのリンク/クリック信号と mrccid様トークン（候補者スレッドの遷移先特定用）。
+    logger.info("受信箱DOMのリンク/クリック信号: %s", extract_dom_signals(first, limit=40))
+    logger.info("受信箱DOMのID様トークン（先頭）: %s", extract_id_tokens(first, limit=40))
+    # 詳細ページを開けていれば、その中の信号も出す（スレッド→履歴書リンク特定用）。
+    if detail_htmls:
+        logger.info("詳細ページDOMのリンク/クリック信号: %s",
+                    extract_dom_signals(detail_htmls[0], limit=40))
+        logger.info("詳細ページDOMのID様トークン（先頭）: %s",
+                    extract_id_tokens(detail_htmls[0], limit=40))
 
 
 def sync_inbox_replies(scanner, repo: Repository, report: ReplySyncReport) -> None:
