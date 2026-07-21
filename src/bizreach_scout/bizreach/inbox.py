@@ -106,14 +106,77 @@ def extract_message_links(html: str, base: str, limit: int = 30) -> list[str]:
     return out
 
 
+def api_index(responses: list[tuple[str, str]]) -> str:
+    """捕捉したAPI応答のPIIなしインデックス（url・サイズ・構造）を文字列化（純関数）。"""
+    import json as _json
+
+    from .reply_probe import redact_shape  # 遅延importで循環回避
+
+    best: dict[str, str] = {}
+    for url, body in responses:
+        if url not in best or len(body) > len(best[url]):
+            best[url] = body
+    ranked = sorted(best.items(), key=lambda t: -len(t[1]))
+    lines = [f"[captured API] {len(best)}種"]
+    for i, (url, body) in enumerate(ranked[:15]):
+        keys = ""
+        with contextlib.suppress(Exception):
+            data = _json.loads(body)
+            if isinstance(data, dict):
+                keys = f" keys={sorted(data.keys())[:12]}"
+            elif isinstance(data, list) and data and isinstance(data[0], dict):
+                keys = f" list[0].keys={sorted(data[0].keys())[:12]}"
+        lines.append(f"  [{i:02d}] {url} ({len(body)}B){keys}")
+    # 最大の応答の構造サンプル（値は伏せ字）。
+    if ranked:
+        with contextlib.suppress(Exception):
+            data = _json.loads(ranked[0][1])
+            lines.append("  最大応答の構造: "
+                         + _json.dumps(redact_shape(data, max_depth=4),
+                                       ensure_ascii=False)[:2500])
+    return "\n".join(lines)
+
+
 class InboxScanner:
-    """受信箱のHTMLをページ送りしながら取得する（読み取りのみ・実送信なし）。"""
+    """受信箱を巡回し、DOMと**裏で流れるAPI応答**の両方を取得する（読み取りのみ）。
+
+    メッセージ画面はAngularJSのSPAで、一覧はDOMではなくXHR/fetchのJSONで描画される
+    （2026-07-21 実データで確認）。そのため応答本文も捕捉し、候補者の識別子照合に使う。
+    """
 
     def __init__(self, client):
         self.client = client
         self.base = client.sel.base_url.rstrip("/")
+        self.responses: list[tuple[str, str]] = []  # (url, body) 自社APIのみ
+        self._installed = False
+
+    def _install_capture(self) -> None:
+        if self._installed:
+            return
+        self._installed = True
+
+        def on_response(resp):
+            with contextlib.suppress(Exception):
+                req = resp.request
+                rtype = getattr(req, "resource_type", "")
+                url = resp.url
+                if "cr-support.jp" not in url:
+                    return
+                if rtype not in ("xhr", "fetch") and "/api/" not in url \
+                        and "/dwr/" not in url and "/ajax/" not in url:
+                    return
+                body = resp.text()
+                if body:
+                    self.responses.append((url, body[:400_000]))
+
+        self.client.page.on("response", on_response)
+
+    def captured_text(self) -> str:
+        """捕捉したAPI応答本文の連結（識別子の部分文字列照合用）。"""
+        return "\n".join(b for _u, b in self.responses)
 
     def fetch_pages(self, max_pages: int = 5, page_size: int = 50) -> list[str]:
+        self._install_capture()
         page = self.client.page
         htmls: list[str] = []
         for n in range(1, max_pages + 1):
@@ -123,7 +186,7 @@ class InboxScanner:
                 page.goto(url, wait_until="domcontentloaded")
                 with contextlib.suppress(Exception):
                     page.wait_for_load_state("networkidle", timeout=10000)
-                self.client.human_delay(1.0, 2.0)
+                self.client.human_delay(1.5, 2.5)
                 html = page.content()
             except Exception as e:
                 logger.warning("受信箱ページ %d の取得に失敗: %s", n, e)
@@ -132,7 +195,8 @@ class InboxScanner:
             # 次ページへのリンクが無ければ終了。
             if f"currentPageNo={n + 1}" not in html:
                 break
-        logger.info("受信箱を %d ページ取得しました。", len(htmls))
+        logger.info("受信箱を %d ページ取得（API応答 %d 件を捕捉）。",
+                    len(htmls), len(self.responses))
         return htmls
 
     def fetch_detail_pages(self, list_htmls: list[str],

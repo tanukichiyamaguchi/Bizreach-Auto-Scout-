@@ -61,6 +61,21 @@ def test_extract_message_links_filters_and_absolutizes():
     assert extract_message_links("", "https://cr-support.jp") == []
 
 
+def test_api_index_lists_endpoints_and_redacts_values():
+    from bizreach_scout.bizreach.inbox import api_index
+
+    responses = [
+        ("https://cr-support.jp/api/v1/messages/search",
+         '{"messages":[{"mrccid":"M-BU1","candidateName":"山田 太郎","unread":true}]}'),
+        ("https://cr-support.jp/api/v2/taskList", '{"count":3}'),
+    ]
+    out = api_index(responses)
+    assert "messages/search" in out and "taskList" in out
+    # 構造サンプルは列挙値/フラグを残し、氏名は伏せる。
+    assert "mrccid" in out and "unread" in out
+    assert "山田" not in out
+
+
 def test_body_shape_strips_head_script_style():
     from bizreach_scout.bizreach.inbox import body_shape
 
