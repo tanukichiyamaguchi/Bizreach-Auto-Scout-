@@ -36,6 +36,14 @@ def test_find_sent_in_html_matches_member_no_or_mrccid():
     assert find_sent_in_html(html2, pairs) == {"BU9999999"}
 
 
+def test_find_sent_in_html_matches_padded_member_no_variant():
+    # DBは正準形 BU2553603、画面はゼロ埋め BU02553603 で表示されるケース。
+    html = '<div class="thread">BU02553603 様とのやりとり</div>'
+    assert find_sent_in_html(html, [("BU2553603", "")]) == {"BU2553603"}
+    # 逆（DBがゼロ埋め・画面が正準形）でも一致する。
+    assert find_sent_in_html("BU2553603", [("BU02553603", "")]) == {"BU02553603"}
+
+
 def test_find_sent_in_html_ignores_short_mrccid_and_empty():
     # 短い mrccid は偶然一致の恐れがあるため照合しない。
     assert find_sent_in_html("abc123", [("BU1", "abc123")]) == set()

@@ -121,6 +121,65 @@ class Repository:
             )
         with contextlib.suppress(sqlite3.OperationalError):
             self.conn.execute("ALTER TABLE sent_log ADD COLUMN reply_checked_at TEXT")
+        self._merge_padded_member_nos()
+
+    def _merge_padded_member_nos(self) -> None:
+        """ゼロ埋め表記（BU0xxxxxxx）の会員番号を正準形へ統合する（毎起動・冪等）。
+
+        取得経路により同じ候補者が BU2488413 / BU02488413 の2表記でDBに入り、
+        送信数の二重カウント（と重複送信）の原因になっていた。両表記が併存する場合は
+        送信済み・より古い方を残して統合する。
+        """
+        from ..models import normalize_member_no
+
+        padded: set[str] = set()
+        for table in ("candidates", "scouts", "sent_log", "replies"):
+            for r in self.conn.execute(f"SELECT DISTINCT member_no FROM {table}"):
+                if normalize_member_no(r["member_no"]) != r["member_no"]:
+                    padded.add(r["member_no"])
+        for p in sorted(padded):
+            c = normalize_member_no(p)
+            # candidates: 正準形が既にあればゼロ埋め行を捨てる（プロフィールは同一人物）。
+            if self.conn.execute("SELECT 1 FROM candidates WHERE member_no=?",
+                                 (c,)).fetchone():
+                self.conn.execute("DELETE FROM candidates WHERE member_no=?", (p,))
+            else:
+                self.conn.execute(
+                    "UPDATE candidates SET member_no=? WHERE member_no=?", (c, p))
+            # scouts / sent_log: (member_no, kind) 一意。送信済み→古い順で残す。
+            for table, order in (("scouts", "status='sent' DESC, created_at ASC"),
+                                 ("sent_log", "sent_at ASC")):
+                for row in self.conn.execute(
+                        f"SELECT kind FROM {table} WHERE member_no=?", (p,)).fetchall():
+                    kind = row["kind"]
+                    both = self.conn.execute(
+                        f"SELECT member_no FROM {table} WHERE member_no IN (?, ?) "
+                        f"AND kind=? ORDER BY {order}", (p, c, kind)).fetchall()
+                    keep = both[0]["member_no"]
+                    for drop in {p, c} - {keep}:
+                        self.conn.execute(
+                            f"DELETE FROM {table} WHERE member_no=? AND kind=?",
+                            (drop, kind))
+                    if keep == p:
+                        self.conn.execute(
+                            f"UPDATE {table} SET member_no=? WHERE member_no=? AND kind=?",
+                            (c, p, kind))
+            # replies: 返信=1 を優先して正準形へ統合。
+            prow = self.conn.execute(
+                "SELECT * FROM replies WHERE member_no=?", (p,)).fetchone()
+            if prow:
+                self.upsert_reply(c, replied=bool(prow["replied"]),
+                                  replied_at=prow["replied_at"],
+                                  detected_by=prow["detected_by"],
+                                  candidate_name=prow["candidate_name"],
+                                  note=prow["note"])
+                self.conn.execute("DELETE FROM replies WHERE member_no=?", (p,))
+        if padded:
+            self.conn.commit()
+            from ..logging_config import logger
+
+            logger.info("会員番号の表記ゆれ %d 件を正準形へ統合しました（重複カウント解消）。",
+                        len(padded))
 
     def close(self) -> None:
         self.conn.close()
