@@ -20,6 +20,7 @@ from ..bizreach.inbox import (
     extract_id_tokens,
     extract_message_links,
     find_sent_in_html,
+    match_subjects,
 )
 from ..bizreach.reply_detect import detect_reply
 from ..logging_config import logger
@@ -91,30 +92,41 @@ def _log_structure_digest(scanner, list_htmls: list[str], detail_htmls: list[str
 def sync_inbox_replies(scanner, repo: Repository, report: ReplySyncReport) -> None:
     """受信箱から送信済み候補者の返信を検知して記録する。
 
-    照合対象は「一覧DOM＋裏で流れるAPI応答（SPAの実データ）」。それでも見つからない
-    場合は各メッセージの詳細ページ（DOM＋API）まで開いて照合する。
+    照合は2本立て:
+    1. 件名照合（主）: 受信箱の返信は「Re: <送信した件名>」で並ぶ。件名は候補者ごとに
+       個別生成の一点物で全件DBに保存済みのため、これが会員番号の突合キーになる
+       （2026-07-21 スクリーンショットで実確認。返信者は実名表示で識別子が出ないため）。
+    2. 識別子照合（副）: 会員番号/mrccid が DOM・API応答に現れた場合。
+    それでも0件なら各メッセージの詳細ページまで開いて再照合する。
     """
     list_htmls = scanner.fetch_pages()
     report.inbox_pages = len(list_htmls)
     pairs = repo.sent_members_with_mrccid()
-    # DOM と API応答の両方を対象に照合（メッセージ一覧はAPIのJSONで届くため）。
-    found = find_sent_in_html("\n".join(list_htmls) + "\n" + _captured_text(scanner), pairs)
+    subjects = repo.sent_subjects()
+    # DOM と API応答の両方を対象に照合（一覧の描画がDOMでもAJAXでも取りこぼさない）。
+    blob = "\n".join(list_htmls) + "\n" + _captured_text(scanner)
+    by_subject = match_subjects(blob, subjects)
+    by_id = find_sent_in_html(blob, pairs)
 
     detail_htmls: list[str] = []
-    if not found and list_htmls:
+    if not (by_subject or by_id) and list_htmls:
         # 各メッセージの詳細ページを開いて照合する（DOMとAPIの両方）。
         detail_htmls = scanner.fetch_detail_pages(list_htmls)
         report.inbox_details = len(detail_htmls)
         blob = "\n".join(detail_htmls) + "\n" + _captured_text(scanner)
-        found |= find_sent_in_html(blob, pairs)
+        by_subject |= match_subjects(blob, subjects)
+        by_id |= find_sent_in_html(blob, pairs)
 
-    if not found:
-        logger.info("受信箱に送信済み候補者の識別子が見つかりませんでした（送信済み%d名と照合）。",
-                    len(pairs))
+    if not (by_subject or by_id):
+        logger.info("受信箱に送信済み候補者の識別子・件名が見つかりませんでした"
+                    "（送信済み%d名・件名%d件と照合）。", len(pairs), len(subjects))
         _log_structure_digest(scanner, list_htmls, detail_htmls, getattr(scanner, "base", ""))
         return
-    report.inbox_detected = _mark_replies(found, repo, "受信箱にメッセージあり")
-    logger.info("受信箱スキャン: 一致%d名 / 新規に返信あり%d名", len(found), report.inbox_detected)
+    marked = _mark_replies(by_subject, repo, "受信箱に返信（件名一致）")
+    marked += _mark_replies(by_id - by_subject, repo, "受信箱にメッセージあり")
+    report.inbox_detected = marked
+    logger.info("受信箱スキャン: 件名一致%d名 / 識別子一致%d名 / 新規に返信あり%d名",
+                len(by_subject), len(by_id), marked)
 
 
 def sync_replies(api, repo: Repository, *, max_checks: int = 60,

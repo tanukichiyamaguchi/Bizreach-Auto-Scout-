@@ -101,6 +101,28 @@ class FakeScanner:
         return "\n".join(b for _u, b in self.responses)
 
 
+def test_sync_replies_detects_by_subject_match(tmp_path):
+    # 受信箱の返信行は「Re: <送信した件名>」で並び、返信者は実名表示のため
+    # 会員番号は画面に出ない（2026-07-21 実画面で確認）。件名で突合できることを検証。
+    repo = _repo_with_sent(tmp_path, [("BU1111111", 3), ("BU2222222", 5)])
+    subject = "【Premium Offer】5店舗の立て直しとメンズ事業部全国1位のご実績に惹かれ限定オファーをさせていただきます"
+    repo.conn.execute("UPDATE scouts SET subject=? WHERE member_no='BU1111111' AND kind='first'",
+                      (subject,))
+    repo.conn.commit()
+    inbox_html = (f'<tr><td>高澤 拓也 / 株式会社リンク</td>'
+                  f'<td>Re: {subject}</td><td>7月20日 19:36</td></tr>')
+    scanner = FakeScanner([inbox_html])
+    api = FakeApi({"M-BU1111111": _resume(), "M-BU2222222": _resume()})
+    report = sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    assert report.inbox_detected == 1
+    row = repo.conn.execute("SELECT * FROM replies WHERE member_no='BU1111111'").fetchone()
+    assert row["replied"] == 1 and row["detected_by"] == "auto"
+    assert "件名一致" in row["note"]
+    # 実名しか出ない他の返信者（送信していない人）は誤検知しない。
+    assert repo.conn.execute("SELECT COUNT(*) AS n FROM replies").fetchone()["n"] == 1
+    repo.close()
+
+
 def test_sync_replies_detects_from_captured_api_json(tmp_path):
     # メッセージ一覧はSPAのAPI(JSON)で届く: DOMは空でもAPI応答に mrccid があれば検知。
     repo = _repo_with_sent(tmp_path, [("BU1111111", 3), ("BU2222222", 5)])

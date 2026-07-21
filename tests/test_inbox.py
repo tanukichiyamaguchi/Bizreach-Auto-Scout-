@@ -76,6 +76,26 @@ def test_api_index_lists_endpoints_and_redacts_values():
     assert "山田" not in out
 
 
+def test_match_subjects_full_and_truncated_and_ambiguous():
+    from bizreach_scout.bizreach.inbox import match_subjects
+
+    subj_a = "【Premium Offer】5店舗の立て直しとメンズ事業部全国1位のご実績に惹かれ限定オファーをさせていただきます"
+    subj_b = "【Premium Offer】9年で新規10社獲得・毎年増収を続ける法人営業力に惹かれ限定オファー"
+    pairs = [("BU_A", subj_a), ("BU_B", subj_b), ("BU_C", "短い"), ("BU_D", subj_b)]
+
+    # 完全一致（DOM上で改行・空白が挟まっても照合できる）。
+    text1 = "<td>Re: 【Premium Offer】5店舗の立て直しとメンズ事業部\n 全国1位のご実績に惹かれ限定オファーをさせていただきます</td>"
+    assert match_subjects(text1, pairs) == {"BU_A"}
+    # 画面上の「…」省略（先頭35文字だけ表示）でも prefix で照合できる。
+    text2 = "<td>Re: " + subj_a[:38] + "…</td>"
+    assert match_subjects(text2, pairs) == {"BU_A"}
+    # subj_b は BU_B と BU_D の2人に紐づく（曖昧）ため照合しない。
+    assert match_subjects(f"Re: {subj_b}", pairs) == set()
+    # 短い件名は偶然一致の恐れがあるため照合しない。
+    assert match_subjects("短い", pairs) == set()
+    assert match_subjects("", pairs) == set()
+
+
 def test_extract_dom_signals_picks_thread_attrs_not_chrome():
     from bizreach_scout.bizreach.inbox import extract_dom_signals
 

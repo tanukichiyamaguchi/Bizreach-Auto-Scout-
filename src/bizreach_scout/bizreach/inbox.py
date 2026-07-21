@@ -143,6 +143,46 @@ def extract_id_tokens(html: str, limit: int = 60) -> list[str]:
     return out
 
 
+def _norm(s: str) -> str:
+    """件名照合用の正規化: 空白を全て除去（DOMの改行・整形の影響を受けない）。"""
+    return re.sub(r"\s+", "", s or "")
+
+
+def match_subjects(text: str, pairs: list[tuple[str, str]], *,
+                   min_len: int = 12, prefix_len: int = 35) -> set[str]:
+    """送信済み件名が受信箱テキストに現れる member_no の集合を返す（純関数）。
+
+    受信箱の返信行は「Re: <送信した件名>」で表示される（2026-07-21 スクリーンショットで
+    実確認）。件名は候補者ごとに個別生成の一点物のため、これが会員番号の突合キーになる。
+
+    - 空白を除去して照合（DOM上の改行・整形に影響されない）。
+    - 完全一致がなければ先頭 prefix_len 文字でも照合（画面上の「…」省略に備える）。
+    - 同一の件名/prefixが複数候補者に紐づく場合は誤検知を避けるため照合しない。
+    - min_len 未満の短い件名は偶然一致の恐れがあるため照合しない。
+    """
+    norm_text = _norm(text)
+    if not norm_text:
+        return set()
+    # 件名（およびprefix）→候補者集合。複数人に紐づくキーは曖昧なので使わない。
+    full_map: dict[str, set[str]] = {}
+    prefix_map: dict[str, set[str]] = {}
+    for member_no, subject in pairs:
+        ns = _norm(subject)
+        if len(ns) < min_len:
+            continue
+        full_map.setdefault(ns, set()).add(member_no)
+        prefix_map.setdefault(ns[:prefix_len], set()).add(member_no)
+
+    found: set[str] = set()
+    for ns, members in full_map.items():
+        if len(members) == 1 and ns in norm_text:
+            found |= members
+    for np_, members in prefix_map.items():
+        if len(members) == 1 and len(np_) >= min_len and np_ in norm_text:
+            found |= members
+    return found
+
+
 # 静的アセット（ライブラリ/画像）。データ応答を埋もれさせるためインデックスから除外。
 _STATIC_ASSET = re.compile(r"\.(js|css|ico|png|jpe?g|gif|svg|woff2?|map)(\?|$)", re.I)
 
