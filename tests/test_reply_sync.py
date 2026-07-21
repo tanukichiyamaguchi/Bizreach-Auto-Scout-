@@ -80,11 +80,13 @@ def test_sync_replies_respects_max_checks_oldest_first(tmp_path):
 
 
 class FakeScanner:
-    """InboxScanner のスタブ（fetch_pages / fetch_detail_pages が固定HTMLを返す）。"""
+    """InboxScanner のスタブ（DOM htmls と 捕捉API応答 responses を返す）。"""
 
-    def __init__(self, htmls: list[str], detail_htmls: list[str] | None = None):
+    def __init__(self, htmls: list[str], detail_htmls: list[str] | None = None,
+                 responses: list[tuple[str, str]] | None = None):
         self.htmls = htmls
         self.detail_htmls = detail_htmls or []
+        self.responses = responses or []
         self.detail_called = 0
         self.base = "https://cr-support.jp"
 
@@ -94,6 +96,27 @@ class FakeScanner:
     def fetch_detail_pages(self, list_htmls, max_details: int = 30) -> list[str]:
         self.detail_called += 1
         return self.detail_htmls
+
+    def captured_text(self) -> str:
+        return "\n".join(b for _u, b in self.responses)
+
+
+def test_sync_replies_detects_from_captured_api_json(tmp_path):
+    # メッセージ一覧はSPAのAPI(JSON)で届く: DOMは空でもAPI応答に mrccid があれば検知。
+    repo = _repo_with_sent(tmp_path, [("BU1111111", 3), ("BU2222222", 5)])
+    api_json = ('{"messages":[{"candidateId":"c1","mrccid":"M-BU1111111",'
+                '"lastMessageFrom":"candidate"}]}')
+    scanner = FakeScanner(
+        ['<html ng-app="V4CRS"><body></body></html>'],   # 空のSPA殻
+        responses=[("https://cr-support.jp/api/v1/messages/search", api_json)])
+    api = FakeApi({"M-BU1111111": _resume(), "M-BU2222222": _resume()})
+    report = sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    assert report.inbox_detected == 1
+    # 1回目の照合（DOM＋API）で確定するため、詳細ページは開かない。
+    assert scanner.detail_called == 0
+    row = repo.conn.execute("SELECT * FROM replies WHERE member_no='BU1111111'").fetchone()
+    assert row["replied"] == 1 and row["detected_by"] == "auto"
+    repo.close()
 
 
 def test_sync_replies_detects_from_inbox_scan(tmp_path):
