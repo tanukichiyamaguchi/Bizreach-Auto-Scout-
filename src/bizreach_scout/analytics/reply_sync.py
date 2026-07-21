@@ -42,18 +42,6 @@ class ReplySyncReport:
                 f"レジュメ{self.checked}件確認から{self.detected}件検知 / エラー{self.errors}件")
 
 
-def _mark_replies(found: set[str], repo: Repository, note: str) -> int:
-    marked = 0
-    for member_no in sorted(found):
-        if repo.is_replied(member_no):
-            continue
-        repo.upsert_reply(member_no, replied=True, replied_at=None,
-                          detected_by="auto", note=note)
-        marked += 1
-        logger.info("返信を検知（受信箱）: %s", member_no)
-    return marked
-
-
 def _captured_text(scanner) -> str:
     """scanner が捕捉したAPI応答本文（無ければ空文字）。"""
     fn = getattr(scanner, "captured_text", None)
@@ -101,6 +89,9 @@ def sync_inbox_replies(scanner, repo: Repository, report: ReplySyncReport) -> No
     """
     list_htmls = scanner.fetch_pages()
     report.inbox_pages = len(list_htmls)
+    if not list_htmls:
+        logger.info("受信箱を取得できませんでした（今回は返信の照合をスキップ）。")
+        return
     pairs = repo.sent_members_with_mrccid()
     subjects = repo.sent_subjects()
     # DOM と API応答の両方を対象に照合（一覧の描画がDOMでもAJAXでも取りこぼさない）。
@@ -109,7 +100,7 @@ def sync_inbox_replies(scanner, repo: Repository, report: ReplySyncReport) -> No
     by_id = find_sent_in_html(blob, pairs)
 
     detail_htmls: list[str] = []
-    if not (by_subject or by_id) and list_htmls:
+    if not (by_subject or by_id):
         # 各メッセージの詳細ページを開いて照合する（DOMとAPIの両方）。
         detail_htmls = scanner.fetch_detail_pages(list_htmls)
         report.inbox_details = len(detail_htmls)
@@ -121,12 +112,15 @@ def sync_inbox_replies(scanner, repo: Repository, report: ReplySyncReport) -> No
         logger.info("受信箱に送信済み候補者の識別子・件名が見つかりませんでした"
                     "（送信済み%d名・件名%d件と照合）。", len(pairs), len(subjects))
         _log_structure_digest(scanner, list_htmls, detail_htmls, getattr(scanner, "base", ""))
-        return
-    marked = _mark_replies(by_subject, repo, "受信箱に返信（件名一致）")
-    marked += _mark_replies(by_id - by_subject, repo, "受信箱にメッセージあり")
-    report.inbox_detected = marked
-    logger.info("受信箱スキャン: 件名一致%d名 / 識別子一致%d名 / 新規に返信あり%d名",
-                len(by_subject), len(by_id), marked)
+
+    # 受信箱スキャンの結果を自動返信の唯一の真実として反映（誤検知を自己修復）。
+    detected = {m: "受信箱に返信（件名一致）" for m in by_subject}
+    for m in by_id - by_subject:
+        detected[m] = "受信箱にメッセージあり"
+    added, removed = repo.reconcile_auto_replies(detected)
+    report.inbox_detected = added
+    logger.info("受信箱スキャン: 件名一致%d名 / 識別子一致%d名 / 新規%d名 / 取消%d名",
+                len(by_subject), len(by_id), added, removed)
 
 
 def sync_replies(api, repo: Repository, *, max_checks: int = 60,

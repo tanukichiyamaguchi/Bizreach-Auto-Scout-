@@ -295,6 +295,10 @@ class InboxScanner:
         self._install_capture()
         page = self.client.page
         self._bootstrap()
+        # 重要: bootstrap（mypage）で流れる求人進捗・ターゲットリスト等には、返信の有無に
+        # 関係なく自社パイプラインの候補者の会員番号が含まれる。これを照合対象に残すと
+        # 「送っただけ」の候補者を誤って返信ありと判定するため、受信箱を読む前に破棄する。
+        self.responses.clear()
         htmls: list[str] = []
         for n in range(1, max_pages + 1):
             url = (f"{self.base}/message/?pageSize={page_size}&folderCd=inbox"
