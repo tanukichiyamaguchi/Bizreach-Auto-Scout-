@@ -143,6 +143,19 @@ def extract_dom_signals(html: str, limit: int = 50) -> list[str]:
     return out
 
 
+# ページ内容の署名に使う「返信スレッドの目印」= Re:件名 と 会員番号。
+_SIGNATURE_MARK = re.compile(r"Re[:：][^\n<>]{4,80}|BU\d{6,10}")
+
+
+def page_signature(text: str) -> frozenset[str]:
+    """受信箱1ページの内容署名（返信件名・会員番号の集合）を返す（純関数）。
+
+    ページ送りの終了判定に使う。空集合＝返信スレッドが1件も無い（末尾を越えた）、
+    前ページと同一＝ページが進んでいない、という判断に用いる。
+    """
+    return frozenset(m.strip() for m in _SIGNATURE_MARK.findall(text or ""))
+
+
 def extract_id_tokens(html: str, limit: int = 60) -> list[str]:
     """DOM中のmrccid様トークン（長い英数字）を重複なしで抽出（純関数・診断用）。"""
     seen: set[str] = set()
@@ -304,7 +317,14 @@ class InboxScanner:
                             page.wait_for_load_state("networkidle", timeout=10000)
                         self.client.human_delay(1.0, 2.0)
 
-    def fetch_pages(self, max_pages: int = 5, page_size: int = 50) -> list[str]:
+    def fetch_pages(self, max_pages: int = 20, page_size: int = 100) -> list[str]:
+        """受信箱を**全ページ**巡回してDOMとAPI応答を集める。
+
+        以前は「DOMに currentPageNo=次 のリンクが無ければ終了」で判定していたが、SPAの
+        DOMにはそのリンクが現れないため常に1ページ目で打ち切られ、古い返信（数週間前に
+        送った候補者への返信）を取りこぼしていた。ページ内容の署名（返信スレッドの件名・
+        会員番号の集合）を使い、内容が尽きる/進まなくなるまでページ送りする。
+        """
         self._install_capture()
         page = self.client.page
         self._bootstrap()
@@ -313,9 +333,11 @@ class InboxScanner:
         # 「送っただけ」の候補者を誤って返信ありと判定するため、受信箱を読む前に破棄する。
         self.responses.clear()
         htmls: list[str] = []
+        prev_sig: frozenset[str] | None = None
         for n in range(1, max_pages + 1):
             url = (f"{self.base}/message/?pageSize={page_size}&folderCd=inbox"
                    f"&currentPageNo={n}&statusDecline=true&kw=")
+            before = len(self.responses)
             try:
                 page.goto(url, wait_until="domcontentloaded")
                 with contextlib.suppress(Exception):
@@ -325,16 +347,22 @@ class InboxScanner:
                     page.wait_for_response(
                         lambda r: "crsAjaxMessage" in r.url or "/dwr/call/" in r.url,
                         timeout=10000)
-                self.client.human_delay(3.0, 4.0)
+                self.client.human_delay(2.0, 3.0)
                 html = page.content()
             except Exception as e:
                 logger.warning("受信箱ページ %d の取得に失敗: %s", n, e)
                 break
             htmls.append(html)
-            # 次ページへのリンクが無ければ終了。
-            if f"currentPageNo={n + 1}" not in html:
+            # このページの返信スレッド署名（DOM＋今ページで新たに捕捉した応答本文）。
+            page_text = html + "\n" + "\n".join(b for _u, b in self.responses[before:])
+            sig = page_signature(page_text)
+            if not sig and n >= 2:
+                htmls.pop()          # 末尾を越えた空ページは捨てる
                 break
-        logger.info("受信箱を %d ページ取得（API応答 %d 件を捕捉）。",
+            if sig and sig == prev_sig:
+                break                # ページ送りが進んでいない（同一内容）→終了
+            prev_sig = sig
+        logger.info("受信箱を %d ページ巡回（API応答 %d 件を捕捉）。",
                     len(htmls), len(self.responses))
         return htmls
 
