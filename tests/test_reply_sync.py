@@ -101,6 +101,40 @@ class FakeScanner:
         return "\n".join(b for _u, b in self.responses)
 
 
+def test_sync_replies_reconciles_and_removes_stale_auto_false_positives(tmp_path):
+    # 誤検知で auto 返信が付いていた候補者が、今回のスキャンで検知されなければ取り消される。
+    repo = _repo_with_sent(tmp_path, [("BU1111111", 3), ("BU2222222", 5)])
+    # BU2222222 は過去に誤って auto 返信ありにされていた（例: mypageの会員番号一致）。
+    repo.upsert_reply("BU2222222", replied=True, replied_at=None, detected_by="auto",
+                      note="受信箱にメッセージあり")
+    subject = "【Premium Offer】5店舗の立て直しとメンズ事業部全国1位のご実績に惹かれ限定オファーをさせていただきます"
+    repo.conn.execute("UPDATE scouts SET subject=? WHERE member_no='BU1111111' AND kind='first'",
+                      (subject,))
+    repo.conn.commit()
+    # 今回の受信箱には BU1111111 の返信だけがある。
+    scanner = FakeScanner([f'<tr><td>Re: {subject}</td></tr>'])
+    api = FakeApi({"M-BU1111111": _resume(), "M-BU2222222": _resume()})
+    sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    # BU1111111 は返信あり、BU2222222 の誤検知は取り消される。
+    assert repo.is_replied("BU1111111") is True
+    assert repo.is_replied("BU2222222") is False
+    repo.close()
+
+
+def test_sync_replies_reconcile_keeps_manual_replies(tmp_path):
+    # 手動チェック(manual)の返信は、今回のスキャンに無くても取り消さない。
+    repo = _repo_with_sent(tmp_path, [("BU1111111", 3), ("BU2222222", 5)])
+    repo.upsert_reply("BU2222222", replied=True, replied_at="2026-07-15",
+                      detected_by="manual", note="電話で確認")
+    scanner = FakeScanner(['<tr><td>Re: 【関係ない件名】</td></tr>'])  # 誰にも一致しない
+    api = FakeApi({"M-BU1111111": _resume(), "M-BU2222222": _resume()})
+    sync_replies(api, repo, max_checks=10, recent_days=45, scanner=scanner)
+    assert repo.is_replied("BU2222222") is True  # manual は保持
+    row = repo.conn.execute("SELECT * FROM replies WHERE member_no='BU2222222'").fetchone()
+    assert row["detected_by"] == "manual"
+    repo.close()
+
+
 def test_sync_replies_detects_by_subject_match(tmp_path):
     # 受信箱の返信行は「Re: <送信した件名>」で並び、返信者は実名表示のため
     # 会員番号は画面に出ない（2026-07-21 実画面で確認）。件名で突合できることを検証。

@@ -419,6 +419,35 @@ class Repository:
             merged += 1
         return merged
 
+    def reconcile_auto_replies(self, detected: dict[str, str]) -> tuple[int, int]:
+        """受信箱スキャンの結果を「自動検知の返信」の唯一の真実として反映する。
+
+        detected: {member_no: 根拠note}。この集合を自動返信の全体とみなし、
+        - 未記録の会員は返信あり(auto)として昇格、
+        - 既存の auto 返信のうち今回検知されなかったものは取り消す（手動 manual は保持）。
+        受信箱には過去の返信が全て残るため、スキャンが取得できていれば当集合が正となる。
+        誤検知（例: mypageのパイプライン会員番号との一致）で付いた返信を自己修復できる。
+        戻り値 (昇格数, 取消数)。
+        """
+        added = 0
+        for member_no, note in detected.items():
+            row = self.conn.execute(
+                "SELECT replied FROM replies WHERE member_no=?", (member_no,)
+            ).fetchone()
+            if not (row and row["replied"]):
+                self.upsert_reply(member_no, replied=True, replied_at=None,
+                                  detected_by="auto", note=note)
+                added += 1
+        # 今回検知されなかった auto 返信を取り消す（manual は残す）。
+        stale = [r["member_no"] for r in self.conn.execute(
+            "SELECT member_no FROM replies WHERE detected_by='auto' AND replied=1"
+        ).fetchall() if r["member_no"] not in detected]
+        for member_no in stale:
+            self.conn.execute(
+                "DELETE FROM replies WHERE member_no=? AND detected_by='auto'", (member_no,))
+        self.conn.commit()
+        return added, len(stale)
+
     def unreplied_sent(self, *, recent_days: int, now: datetime | None = None,
                        limit: int = 60) -> list[sqlite3.Row]:
         """自動返信チェックの対象: 未返信かつ初回送信が recent_days 以内。
