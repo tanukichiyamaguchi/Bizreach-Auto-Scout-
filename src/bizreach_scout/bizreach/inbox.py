@@ -106,19 +106,28 @@ def extract_message_links(html: str, base: str, limit: int = 30) -> list[str]:
     return out
 
 
+# 静的アセット（ライブラリ/画像）。データ応答を埋もれさせるためインデックスから除外。
+_STATIC_ASSET = re.compile(r"\.(js|css|ico|png|jpe?g|gif|svg|woff2?|map)(\?|$)", re.I)
+
+
 def api_index(responses: list[tuple[str, str]]) -> str:
-    """捕捉したAPI応答のPIIなしインデックス（url・サイズ・構造）を文字列化（純関数）。"""
+    """捕捉したAPI応答のPIIなしインデックス（url・サイズ・構造）を文字列化（純関数）。
+
+    データ応答（DWR plaincall / JSON）を見えるように、静的アセット(.js/.css等)は除外する。
+    """
     import json as _json
 
     from .reply_probe import redact_shape  # 遅延importで循環回避
 
     best: dict[str, str] = {}
     for url, body in responses:
+        if _STATIC_ASSET.search(url):
+            continue  # ライブラリ本体は識別子照合にもインデックスにも不要
         if url not in best or len(body) > len(best[url]):
             best[url] = body
     ranked = sorted(best.items(), key=lambda t: -len(t[1]))
-    lines = [f"[captured API] {len(best)}種"]
-    for i, (url, body) in enumerate(ranked[:15]):
+    lines = [f"[captured API] データ応答 {len(best)}種（静的アセット除外）"]
+    for i, (url, body) in enumerate(ranked[:20]):
         keys = ""
         with contextlib.suppress(Exception):
             data = _json.loads(body)
@@ -127,13 +136,21 @@ def api_index(responses: list[tuple[str, str]]) -> str:
             elif isinstance(data, list) and data and isinstance(data[0], dict):
                 keys = f" list[0].keys={sorted(data[0].keys())[:12]}"
         lines.append(f"  [{i:02d}] {url} ({len(body)}B){keys}")
-    # 最大の応答の構造サンプル（値は伏せ字）。
-    if ranked:
+    # データ応答上位3件の構造サンプル（値は伏せ字。DWRはJSONでないためテキスト断片）。
+    for url, body in ranked[:3]:
         with contextlib.suppress(Exception):
-            data = _json.loads(ranked[0][1])
-            lines.append("  最大応答の構造: "
+            data = _json.loads(body)
+            lines.append(f"  構造[{url[-60:]}]: "
                          + _json.dumps(redact_shape(data, max_depth=4),
-                                       ensure_ascii=False)[:2500])
+                                       ensure_ascii=False)[:1500])
+            continue
+        # 非JSON（DWR等）は英数字トークンだけ抜き出してPIIなしで様子を見る。
+        tokens = re.findall(r"[A-Za-z0-9_]{4,40}", body)
+        uniq: list[str] = []
+        for t in tokens:
+            if t not in uniq:
+                uniq.append(t)
+        lines.append(f"  非JSON応答トークン[{url[-60:]}]: {uniq[:60]}")
     return "\n".join(lines)
 
 
@@ -186,7 +203,12 @@ class InboxScanner:
                 page.goto(url, wait_until="domcontentloaded")
                 with contextlib.suppress(Exception):
                     page.wait_for_load_state("networkidle", timeout=10000)
-                self.client.human_delay(1.5, 2.5)
+                # SPA(DWR)がメッセージ一覧をAJAXで取りに行くのを待ってから本文を読む。
+                with contextlib.suppress(Exception):
+                    page.wait_for_response(
+                        lambda r: "/dwr/call/" in r.url or "/message" in r.url.lower(),
+                        timeout=8000)
+                self.client.human_delay(3.0, 4.0)
                 html = page.content()
             except Exception as e:
                 logger.warning("受信箱ページ %d の取得に失敗: %s", n, e)

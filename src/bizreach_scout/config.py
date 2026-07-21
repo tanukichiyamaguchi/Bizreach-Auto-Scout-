@@ -75,7 +75,9 @@ class Settings(BaseSettings):
     # サービスアカウント鍵JSONのパス（CIでは $RUNNER_TEMP に復号して渡す）。
     gsheet_credentials: str = ""
     # 返信自動チェック: 1回の実行で確認する最大人数（レジュメ再取得の負荷制御）。
-    reply_check_max: int = 60
+    # recent_days の窓内の送信済み全員を1回で確認できるよう十分大きく取る
+    # （氏名開示＝返信のシグナルは、その候補者を確認した時だけ拾えるため）。
+    reply_check_max: int = 400
     # 返信自動チェック: 初回送信から何日以内の候補者を確認対象にするか。
     reply_recent_days: int = 45
 
