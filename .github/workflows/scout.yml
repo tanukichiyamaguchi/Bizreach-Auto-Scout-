@@ -114,6 +114,16 @@ jobs:
             echo "$SEARCH_URL_VAL"
             echo "__BIZSCOUT_EOF__"
           } >> "$GITHUB_ENV"
+          # 運用ルール: 土曜(JST)の定期実行はピックアップ（無料枠）のみとし、検索スカウト
+          # （プラチナ枠）＋再送はスキップする。TZ=Asia/Tokyo のため date はJST。
+          # date +%u は 1=月〜7=日、6=土。手動実行(workflow_dispatch)は明示操作なので対象外。
+          DOW="$(date +%u)"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$DOW" = "6" ]; then
+            echo "SKIP_SEARCH=true" >> "$GITHUB_ENV"
+            echo "土曜(JST)のため検索スカウト＋再送はスキップし、ピックアップのみ送付します。"
+          else
+            echo "SKIP_SEARCH=false" >> "$GITHUB_ENV"
+          fi
 
       # --- ログイン セッションを secret から復元（2FA/bot検知回避に推奨）---
       - name: Seed Bizreach session
@@ -158,8 +168,9 @@ jobs:
           echo "⚠️ 本日のピックアップ送信が失敗しました（認証切れ・全件失敗の可能性）。" >> "$GITHUB_STEP_SUMMARY"
 
       # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
+      # ただし土曜(JST)の定期実行は SKIP_SEARCH=true でスキップ（ピックアップのみ運用）。
       - name: Run scout (検索スカウト＋再送)
-        if: env.RUN_MODE == 'scout' || github.event_name == 'schedule'
+        if: (env.RUN_MODE == 'scout' || github.event_name == 'schedule') && env.SKIP_SEARCH != 'true'
         run: |
           echo "DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX / SEARCH_URL set: $([ -n "$SEARCH_URL" ] && echo yes || echo no)"
           if [ -n "$SEARCH_URL" ]; then
