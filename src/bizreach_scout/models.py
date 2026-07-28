@@ -106,6 +106,8 @@ class Candidate(BaseModel):
     desired_jobs: str = ""
     desired_industries: str = ""
     work_style: str = ""
+    desired_locations: str = ""  # 希望勤務地
+    desired_other: str = ""  # その他の希望（本人が自由記述で書いたもの）
 
     summary: str = ""  # 自己PR・職務要約
     raw_profile: str = ""  # 取得した生テキスト（プロンプトのフォールバックに使用）

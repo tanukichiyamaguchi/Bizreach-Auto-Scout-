@@ -234,6 +234,8 @@ def render_candidate_profile(candidate: Candidate) -> str:
         ("希望職種", candidate.desired_jobs),
         ("希望業界", candidate.desired_industries),
         ("興味のある働き方", candidate.work_style),
+        ("希望勤務地", candidate.desired_locations),
+        ("その他の希望（本人記入）", candidate.desired_other),
         ("職務要約・自己PR", candidate.summary),
     ]
     lines = [f"- {label}: {value}" for label, value in fields if value not in (None, "", [])]
