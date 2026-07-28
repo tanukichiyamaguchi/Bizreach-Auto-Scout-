@@ -172,7 +172,7 @@ jobs:
           echo "⚠️ 本日のピックアップ送信が失敗しました（認証切れ・全件失敗の可能性）。" >> "$GITHUB_STEP_SUMMARY"
 
       # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
-      # ただし土曜(JST)の定期実行は SKIP_SEARCH=true でスキップ（ピックアップのみ運用）。
+      # ただし土日祝(JST)の定期実行は SKIP_SEARCH=true でスキップ（ピックアップのみ運用）。
       - name: Run scout (検索スカウト＋再送)
         if: (env.RUN_MODE == 'scout' || github.event_name == 'schedule') && env.SKIP_SEARCH != 'true'
         run: |
