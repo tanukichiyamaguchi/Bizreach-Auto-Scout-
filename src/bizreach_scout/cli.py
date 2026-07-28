@@ -376,6 +376,31 @@ def sync_replies_cmd(max_checks: int | None, headless: bool) -> None:
             repo.close()
 
 
+@cli.command(name="check-schedule")
+@click.option("--kind", type=click.Choice(["search", "pickup"]), default="search",
+              help="search=通常スカウト（土日祝は休止） / pickup=ピックアップ（毎日送信）")
+def check_schedule(kind: str) -> None:
+    """本日その種別を送信してよいかを判定する（送る=exit 0 / 送らない=exit 1）。
+
+    定期実行のワークフローから呼び、通常スカウトの土日祝スキップに使う。
+    ピックアップは無料枠かつ当日限りのため常に送信可。
+
+    出力の先頭に SEND: / SKIP: を付ける（呼び出し側はこの文字列で判定する）。
+    判定自体が失敗した場合は SKIP: を出さないため、呼び出し側は従来どおり送信する
+    （設定エラーで業務が止まらないようにするため）。
+    """
+    if kind == "pickup":
+        click.echo("SEND: ピックアップは毎日送信します。")
+        return
+    from .schedule_rules import search_scout_pause_reason
+
+    reason = search_scout_pause_reason()
+    if reason:
+        click.echo(f"SKIP: 通常スカウトは本日送信しません（{reason}）。")
+        raise SystemExit(1)
+    click.echo("SEND: 通常スカウトを送信します（本日は休止対象外）。")
+
+
 @cli.command(name="probe-replies")
 @click.option("--headless/--no-headless", default=True)
 def probe_replies(headless: bool) -> None:

@@ -74,6 +74,14 @@ class MatchingRules(BaseModel):
     # 全メールに載せるコンサルタント紹介の下限（保証人数）。共通点が無くても近い経歴/
     # フォールバックで最低この人数を必ず紹介する。max_intro_consultants=0 のときのみ無効。
     min_intro_consultants: int = 1
+    # 紹介対象から除外するコンサルタントID（署名者本人など）。
+    exclude_consultant_ids: list[str] = Field(default_factory=list)
+    # 同上を氏名（部分一致）でも指定できる保険（import で id が振り直されても効く）。
+    exclude_consultant_names: list[str] = Field(default_factory=list)
+    # 「前職企業の共通点」の根拠にしない一般名（業種の総称）。誤マッチ由来の嘘を防ぐ。
+    generic_company_terms: list[str] = Field(default_factory=list)
+    # 「職種・役割の共通点」の根拠にしない語（役職名など）。
+    role_stopwords: list[str] = Field(default_factory=list)
 
 
 class ToneMatch(BaseModel):
@@ -94,6 +102,18 @@ class ToneProfile(BaseModel):
     focus: str = ""
 
 
+class ScheduleRules(BaseModel):
+    """送信曜日の運用ルール（通常スカウトのみ対象。ピックアップは毎日送る）。"""
+
+    model_config = _Forbid
+    # 通常スカウトを送らない曜日（1=月 … 6=土, 7=日）。
+    search_skip_weekdays: list[int] = Field(default_factory=list)
+    # 日本の祝日も通常スカウトを送らない。
+    search_skip_holidays: bool = False
+    # 追加の休止日（YYYY-MM-DD）。
+    search_skip_dates: list[str] = Field(default_factory=list)
+
+
 class ScoutRules(BaseModel):
     model_config = _Forbid
     eligibility: EligibilityRules = Field(default_factory=EligibilityRules)
@@ -101,6 +121,7 @@ class ScoutRules(BaseModel):
     resend: ResendRules = Field(default_factory=ResendRules)
     constraints: Constraints = Field(default_factory=Constraints)
     matching: MatchingRules = Field(default_factory=MatchingRules)
+    schedule: ScheduleRules = Field(default_factory=ScheduleRules)
 
 
 def validate_rules(raw: dict) -> dict:

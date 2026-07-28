@@ -141,20 +141,38 @@ def _sent_log_rows(records: list[SentRecord]) -> list[list[object]]:
 
 
 def _period_rows(stats: list[PeriodStat], label_header: str) -> list[list[object]]:
-    rows: list[list[object]] = [
-        [label_header, "送信数", "返信数", "返信率(%)", "累計送信", "累計返信率(%)"],
+    """週次/月次の集計行。送信枠の内訳（通常スカウト/ピックアップ）を末尾列に出す。
+
+    注意: 週次・月次のコンボチャートは列0(ラベル)/列1(送信数)/列3(返信率%)を参照するため、
+    内訳列は必ず**末尾に追加**する（先頭〜6列目の並びを変えるとチャートがずれる）。
+    """
+    from .aggregate import GROUP_LABELS, GROUP_ORDER
+
+    header: list[object] = [
+        label_header, "送信数", "返信数", "返信率(%)", "累計送信", "累計返信率(%)",
     ]
+    for g in GROUP_ORDER:
+        header += [f"{GROUP_LABELS[g]}送信", f"{GROUP_LABELS[g]}返信",
+                   f"{GROUP_LABELS[g]}返信率(%)"]
+    header.append(f"{GROUP_LABELS['unknown']}送信")
+    rows: list[list[object]] = [header]
     cum_sent = cum_replied = 0
     for s in stats:
         cum_sent += s.sent
         cum_replied += s.replied
-        rows.append([
+        row: list[object] = [
             s.label, s.sent, s.replied, round(s.rate * 100, 1),
             cum_sent,
             round((cum_replied / cum_sent * 100) if cum_sent else 0.0, 1),
-        ])
+        ]
+        for g in GROUP_ORDER:
+            row += [s.group_sent(g), s.group_replied(g), round(s.group_rate(g) * 100, 1)]
+        row.append(s.group_sent("unknown"))
+        rows.append(row)
     rows.append([])
     rows.append(["※返信は初回送信の週/月に帰属します。直近の期間は返信がまだ届き得るため低めに出ます。"])
+    rows.append(["※送信数 = 通常スカウト（プラチナ/通常枠）＋ ピックアップ（無料枠）＋ 内訳不明"
+                 "（送信枠を記録する前の過去データ）。"])
     return rows
 
 

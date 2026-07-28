@@ -114,13 +114,17 @@ jobs:
             echo "$SEARCH_URL_VAL"
             echo "__BIZSCOUT_EOF__"
           } >> "$GITHUB_ENV"
-          # 運用ルール: 土曜(JST)の定期実行はピックアップ（無料枠）のみとし、検索スカウト
-          # （プラチナ枠）＋再送はスキップする。TZ=Asia/Tokyo のため date はJST。
-          # date +%u は 1=月〜7=日、6=土。手動実行(workflow_dispatch)は明示操作なので対象外。
-          DOW="$(date +%u)"
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$DOW" = "6" ]; then
+          # 運用ルール: 土日祝(JST)の定期実行はピックアップ（無料枠・毎日送信）のみとし、
+          # 通常スカウト（検索スカウト＋再送）はスキップする。判定は config/scout_rules.yaml の
+          # schedule セクションに基づき bizscout check-schedule が行う（祝日は振替休日・
+          # 国民の休日も判定）。手動実行(workflow_dispatch)は明示操作なので対象外。
+          SCHED_OUT="$(bizscout check-schedule --kind search 2>&1 || true)"
+          echo "$SCHED_OUT"
+          # 判定が SKIP: を返したときだけ休止する。判定自体が失敗した場合は SKIP: が
+          # 出ないため従来どおり送信する（設定エラーで業務が止まらないようにする）。
+          if [ "${{ github.event_name }}" = "schedule" ] && printf '%s' "$SCHED_OUT" | grep -q '^SKIP:'; then
             echo "SKIP_SEARCH=true" >> "$GITHUB_ENV"
-            echo "土曜(JST)のため検索スカウト＋再送はスキップし、ピックアップのみ送付します。"
+            echo "本日は通常スカウトを休止し、ピックアップのみ送付します。"
           else
             echo "SKIP_SEARCH=false" >> "$GITHUB_ENV"
           fi
@@ -168,7 +172,7 @@ jobs:
           echo "⚠️ 本日のピックアップ送信が失敗しました（認証切れ・全件失敗の可能性）。" >> "$GITHUB_STEP_SUMMARY"
 
       # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
-      # ただし土曜(JST)の定期実行は SKIP_SEARCH=true でスキップ（ピックアップのみ運用）。
+      # ただし土日祝(JST)の定期実行は SKIP_SEARCH=true でスキップ（ピックアップのみ運用）。
       - name: Run scout (検索スカウト＋再送)
         if: (env.RUN_MODE == 'scout' || github.event_name == 'schedule') && env.SKIP_SEARCH != 'true'
         run: |

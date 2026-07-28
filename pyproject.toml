@@ -22,6 +22,9 @@ dependencies = [
     "python-docx>=1.1.0",
     "gspread>=6.0.0",
     "google-auth>=2.23.0",
+    # 日本の祝日判定（土日祝は通常スカウトを送らない運用ルールに使用）。
+    # 振替休日・国民の休日・春分/秋分まで正確に判定する。
+    "jpholiday>=0.1.10",
 ]
 
 [project.scripts]

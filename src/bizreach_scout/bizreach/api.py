@@ -112,6 +112,95 @@ _LANG_LEVEL_KEYS = ("level", "proficiency", "languageLevel", "skillLevel", "grad
 _logged_resume_keys = False
 _logged_language_field = False
 _logged_language_raw = False
+_logged_desired_keys = False
+
+# --- 希望条件（興味のある働き方・希望職種・希望業界）の抽出 -------------------
+# 重要: これらは **desiredConditions（希望条件）配下のみ** から取る。レジュメの
+# トップレベルにある industries / jobCategories は「経験してきた業界・職種」であり
+# 「希望」ではないため、希望として扱うと文面に事実と異なる内容が入る。
+# desiredConditions の中身は income 以外が実データ未確認のため、候補キーを複数試し、
+# 取れなければ空のままにする（空ならプロンプトに出ず、モデルは言及できない＝嘘を防ぐ）。
+_WORK_STYLE_KEYS = (
+    "workStyles", "workStyle", "interestedWorkStyles", "interestedWorkStyle",
+    "desiredWorkStyles", "preferredWorkStyles", "workStyleTypes", "workingStyles",
+    "employmentTypes", "workPreferences",
+)
+_DESIRED_JOB_KEYS = (
+    "desiredJobCategories", "desiredJobs", "desiredOccupations",
+    "jobCategories", "jobTypes", "occupations", "jobs",
+)
+_DESIRED_INDUSTRY_KEYS = (
+    "desiredIndustries", "desiredIndustryCategories", "industries", "industryNames",
+)
+
+
+def _flatten_labels(val: object, depth: int = 0) -> str:
+    """希望条件の値（文字列/リスト/辞書）を「、」区切りの読みやすい文字列にする。"""
+    out: list[str] = []
+
+    def walk(v: object, d: int) -> None:
+        if d > 4:
+            return
+        if isinstance(v, str):
+            s = v.strip()
+            if s:
+                out.append(s)
+        elif isinstance(v, dict):
+            s = _ja(v) or _en(v)
+            if s:
+                out.append(s)
+                return
+            for k in ("name", "label", "text", "title", "value"):
+                if k in v:
+                    walk(v[k], d + 1)
+                    return
+        elif isinstance(v, list):
+            for x in v:
+                walk(x, d + 1)
+
+    walk(val, depth)
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for s in out:
+        if s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    return "、".join(uniq)
+
+
+def _pick_desired(desired: dict, keys: tuple[str, ...]) -> str:
+    """希望条件 dict から、候補キーのうち最初に値が取れたものを文字列で返す。"""
+    if not isinstance(desired, dict):
+        return ""
+    for k in keys:
+        if k in desired:
+            text = _flatten_labels(desired[k])
+            if text:
+                return text
+    return ""
+
+
+def _extract_desired(resume: dict) -> dict[str, str]:
+    """希望条件（興味のある働き方・希望職種・希望業界）を抽出する。
+
+    desiredConditions の実データ構造は income 以外が未確認のため、初回だけキー一覧を
+    ログに出して次回の特定材料にする（値は出さない＝個人情報を残さない）。
+    取得できなければ空文字のままとし、プロンプトにも出さない（モデルが推測で
+    「リモート希望とのことですが」等と書く事故を防ぐ）。
+    """
+    global _logged_desired_keys
+    desired = resume.get("desiredConditions")
+    if isinstance(desired, dict) and not _logged_desired_keys:
+        logger.info("希望条件(desiredConditions)のキー一覧（働き方の項目特定用）: %s",
+                    sorted(desired.keys()))
+        _logged_desired_keys = True
+    if not isinstance(desired, dict):
+        return {"work_style": "", "desired_jobs": "", "desired_industries": ""}
+    return {
+        "work_style": _pick_desired(desired, _WORK_STYLE_KEYS),
+        "desired_jobs": _pick_desired(desired, _DESIRED_JOB_KEYS),
+        "desired_industries": _pick_desired(desired, _DESIRED_INDUSTRY_KEYS),
+    }
 
 
 def _lang_field(item: dict, keys: tuple[str, ...]) -> str:
@@ -291,6 +380,9 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     foreign_parts += [_ja(q.get("name")) + " " + _en(q.get("name")) for q in quals]
     foreign_text = "\n".join(p for p in foreign_parts if p and p.strip())
 
+    # 希望条件（興味のある働き方・希望職種・希望業界）。取得できなければ空のまま。
+    desired = _extract_desired(resume)
+
     return Candidate(
         member_no=member_no or mrccid,
         mrccid=mrccid,
@@ -307,6 +399,9 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         job_function=current_title,
         salary_current=_income_label(resume.get("income")),
         salary_desired=_income_label((resume.get("desiredConditions") or {}).get("income")),
+        work_style=desired["work_style"],
+        desired_jobs=desired["desired_jobs"],
+        desired_industries=desired["desired_industries"],
         summary=summary,
         raw_profile=raw_profile,
         foreign_text=foreign_text,

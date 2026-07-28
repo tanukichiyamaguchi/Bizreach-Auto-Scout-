@@ -163,11 +163,53 @@ class ScoutGenerator:
         resend_intro_matches: list[ConsultantMatch],
         rules: dict,
     ) -> list[str]:
-        """文面制約違反とコンサルタント紹介の不足をまとめて返す。"""
+        """文面制約違反・コンサルタント紹介の不足・虚偽の共通点断定をまとめて返す。"""
         return (
             self._collect_issues(scout, rules)
             + self._consultant_coverage_issues(data, intro_matches, resend_intro_matches)
+            + self._false_commonality_issues(data, intro_matches, resend_intro_matches)
         )
+
+    @staticmethod
+    def _false_commonality_issues(
+        data: dict,
+        intro_matches: list[ConsultantMatch],
+        resend_intro_matches: list[ConsultantMatch],
+    ) -> list[str]:
+        """共通点が無いコンサルタントの紹介文で「同じ〇〇」と断定していないか検査する。
+
+        共通点マッチではない（近い経歴/フォールバック）のに「あなたと同じ」「同じく〇〇出身」
+        などと書くと、事実と異なる紹介になる。検知したら1回だけの修正リトライに回す。
+        """
+        issues: list[str] = []
+        # 共通点を断定する表現。「近い」「近しい」は断定でないため対象外。
+        assertive = ("同じ", "同様に", "同期", "同じく", "共通点", "同郷", "同窓")
+        by_id = {
+            normalize_consultant_id(m.consultant.id): m
+            for m in list(intro_matches) + list(resend_intro_matches)
+        }
+        for key, label in (("consultant_intros", "初回"),
+                           ("resend_consultant_intros", "再送")):
+            for item in data.get(key) or []:
+                if not isinstance(item, dict):
+                    continue
+                cid = normalize_consultant_id(str(item.get("consultant_id", "")))
+                blurb = str(item.get("blurb", ""))
+                m = by_id.get(cid)
+                if m is None or not blurb.strip():
+                    continue
+                # 共通点マッチ（recruit/insurance/general）は断定してよい。
+                if m.category not in ("soft", "fallback"):
+                    continue
+                hit = [w for w in assertive if w in blurb]
+                if hit:
+                    issues.append(
+                        f"{key}（{label}）の {m.consultant.display_name} は候補者との共通点が"
+                        f"確認できていないため、共通点を断定する表現（{'、'.join(hit)}）を"
+                        "使わないでください。当社で活躍するコンサルタントとして本人の"
+                        "専門・経歴のみを紹介する文に書き換えてください。"
+                    )
+        return issues
 
     def _retry_with_corrections(
         self,

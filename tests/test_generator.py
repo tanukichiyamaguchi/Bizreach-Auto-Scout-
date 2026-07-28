@@ -370,3 +370,27 @@ def test_resend_consultant_intro_capped_to_max_mentions():
 
     assert "井ノ上さんの再送用紹介文" in scout.resend.body
     assert "染谷さんの再送用紹介文" not in scout.resend.body  # 上限(既定1名)により除外
+
+
+def test_false_commonality_issue_detected_for_non_common_match():
+    """共通点が無いコンサルタントの紹介文で「同じ」と断定したら修正リトライに回す。"""
+    from bizreach_scout.generation.generator import ScoutGenerator
+    from bizreach_scout.models import ConsultantMatch, ConsultantProfile
+
+    c = ConsultantProfile(id="x1", display_name="山田 一郎", profile_url="u")
+    fallback = ConsultantMatch(consultant=c, common_points=["当社で活躍するコンサルタント"],
+                               category="fallback")
+    common = ConsultantMatch(consultant=c, common_points=["前職企業の共通点（リクルート）"],
+                             category="recruit")
+
+    data = {"consultant_intros": [
+        {"consultant_id": "x1", "blurb": "あなたと同じリクルート出身の山田がおります。"}]}
+    # fallback（共通点なし）で断定 → 指摘される。
+    issues = ScoutGenerator._false_commonality_issues(data, [fallback], [])
+    assert issues and "山田 一郎" in issues[0]
+    # 実際に共通点マッチしている場合は指摘しない。
+    assert ScoutGenerator._false_commonality_issues(data, [common], []) == []
+    # 断定表現が無ければ指摘しない。
+    ok = {"consultant_intros": [
+        {"consultant_id": "x1", "blurb": "当社で活躍する医院経営分野のコンサルタントです。"}]}
+    assert ScoutGenerator._false_commonality_issues(ok, [fallback], []) == []
