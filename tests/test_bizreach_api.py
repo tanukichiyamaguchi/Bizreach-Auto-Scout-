@@ -292,3 +292,57 @@ def test_parse_rrsc():
     url = "https://cr-support.jp/scout/highclass/search/?rrsc=3444981"
     assert BizreachApi.parse_rrsc(url) == "3444981"
     assert BizreachApi.parse_rrsc("https://cr-support.jp/x") is None
+
+
+# --- 希望条件（興味のある働き方）の抽出 ---------------------------------------
+
+def test_extract_desired_reads_work_style_from_desired_conditions():
+    from bizreach_scout.bizreach.api import resume_to_candidate
+
+    resume = {
+        "bizreachUserId": "BU1", "mrccid": "m1",
+        "desiredConditions": {
+            "income": "Upper800",
+            "workStyles": [{"ja": "転勤なし"}, {"ja": "裁量労働"}],
+            "desiredJobCategories": ["経営コンサルタント"],
+            "desiredIndustries": [{"ja": "コンサルティング"}],
+        },
+    }
+    cand = resume_to_candidate(resume, "m1")
+    assert cand.work_style == "転勤なし、裁量労働"
+    assert cand.desired_jobs == "経営コンサルタント"
+    assert cand.desired_industries == "コンサルティング"
+
+
+def test_extract_desired_ignores_experience_fields_at_top_level():
+    from bizreach_scout.bizreach.api import resume_to_candidate
+
+    # トップレベルの industries / jobCategories は「経験してきた業界・職種」であり
+    # 希望ではない。これを希望として拾うと文面に事実と異なる内容が入るため使わない。
+    resume = {
+        "bizreachUserId": "BU2", "mrccid": "m2",
+        "industries": [{"code": "IT", "yearsOfExperience": 10}],
+        "jobCategories": ["営業"],
+        "desiredConditions": {"income": "Upper800"},
+    }
+    cand = resume_to_candidate(resume, "m2")
+    assert cand.work_style == ""
+    assert cand.desired_jobs == ""
+    assert cand.desired_industries == ""
+
+
+def test_extract_desired_handles_missing_and_odd_shapes():
+    from bizreach_scout.bizreach.api import resume_to_candidate
+
+    for resume in (
+        {"bizreachUserId": "BU3", "mrccid": "m3"},                       # 希望条件なし
+        {"bizreachUserId": "BU4", "mrccid": "m4", "desiredConditions": []},  # 想定外の型
+        {"bizreachUserId": "BU5", "mrccid": "m5",
+         "desiredConditions": {"workStyle": "リモート可"}},              # 単一文字列
+    ):
+        cand = resume_to_candidate(resume, resume["mrccid"])
+        assert cand is not None
+    last = resume_to_candidate(
+        {"bizreachUserId": "BU5", "mrccid": "m5",
+         "desiredConditions": {"workStyle": "リモート可"}}, "m5")
+    assert last.work_style == "リモート可"

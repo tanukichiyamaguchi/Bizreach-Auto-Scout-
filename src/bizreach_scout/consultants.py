@@ -32,17 +32,94 @@ def _norm(s: str) -> str:
     return s.strip().lower().replace(" ", "").replace("　", "")
 
 
-def _contains_any(haystacks: list[str], needles: list[str]) -> list[str]:
-    """haystacks のいずれかに needles のいずれかが含まれれば、その needle を返す。"""
+def _contains_any(haystacks: list[str], needles: list[str],
+                  *, allow_reverse: bool = False, min_reverse_len: int = 3) -> list[str]:
+    """haystacks のいずれかに needles のいずれかが含まれれば、その needle を返す。
+
+    既定は順方向のみ（needle ⊂ haystack）。逆方向（haystack ⊂ needle）は実データで
+    誤マッチを量産することを確認したため既定で無効:
+      - 候補者「トヨタ自動車」（メーカー本体）が、コンサルの「トヨタ自動車直系の自動車販売
+        会社」に含まれて『前職企業の共通点』になる（別会社なのに同じ出身と書かれる）。
+      - 候補者の役職「営業」が、コンサルの「法人営業」に含まれて12名と一致し、
+        『職種・役割の共通点』が量産される。
+    「近い経歴」のように断定しないラベルで使う照合のみ allow_reverse=True で opt-in する。
+    その場合も min_reverse_len 未満の短い語（例「営業」）は多数の相手に当たって
+    意味のない一致を生むため後方一致の対象にしない。
+    """
     hits: list[str] = []
     norm_hay = [_norm(h) for h in haystacks if h]
     for n in needles:
         nn = _norm(n)
         if not nn:
             continue
-        if any(nn in h or h in nn for h in norm_hay):
+        if any(nn in h or (allow_reverse and len(h) >= min_reverse_len and h in nn)
+               for h in norm_hay):
             hits.append(n)
     return hits
+
+
+def _role_stopwords(rules: dict | None = None) -> set[str]:
+    """職種・役割の共通点の根拠にしない語（役職名など）。"""
+    cfg = (rules or scout_rules()).get("matching", {})
+    return {_norm(t) for t in cfg.get("role_stopwords", []) if t}
+
+
+def _generic_terms(rules: dict | None = None) -> set[str]:
+    """企業名の共通点の根拠にしない一般名（業種の総称）の集合。"""
+    cfg = (rules or scout_rules()).get("matching", {})
+    return {_norm(t) for t in cfg.get("generic_company_terms", []) if t}
+
+
+def excluded_consultant_ids(rules: dict | None = None) -> set[str]:
+    """紹介対象から除外するコンサルタントID（署名者本人など）。"""
+    cfg = (rules or scout_rules()).get("matching", {})
+    return {normalize_consultant_id(i) for i in cfg.get("exclude_consultant_ids", []) if i}
+
+
+def _excluded_names(rules: dict | None = None) -> set[str]:
+    """氏名で除外する対象（IDが振り直されても効く保険）。"""
+    cfg = (rules or scout_rules()).get("matching", {})
+    return {_norm(n) for n in cfg.get("exclude_consultant_names", []) if n}
+
+
+def _visible_consultants(
+    consultants: list[ConsultantProfile], rules: dict | None = None
+) -> list[ConsultantProfile]:
+    """紹介・マッチングの対象となるコンサルタントのみを返す。
+
+    署名者（代表取締役社長）はメールの差出人本人であり、第三者として紹介するのは
+    不自然なため除外する。import-consultants は consultants.json を再生成し id を
+    振り直すことがあるため、ID だけでなく**氏名**でも除外できるようにしている。
+    """
+    excluded_ids = excluded_consultant_ids(rules)
+    excluded_names = _excluded_names(rules)
+    if not excluded_ids and not excluded_names:
+        return list(consultants)
+    out: list[ConsultantProfile] = []
+    for c in consultants:
+        if normalize_consultant_id(c.id) in excluded_ids:
+            continue
+        name = _norm(c.display_name)
+        if any(n and n in name for n in excluded_names):
+            continue
+        out.append(c)
+    return out
+
+
+def _company_hits(candidate_companies: list[str], former_companies: list[str],
+                  rules: dict | None = None) -> list[str]:
+    """候補者の在籍企業と実際に一致した「具体的な企業名」だけを返す。
+
+    従来は業種の総称（「サービス業」「専門商社」等）とも部分一致し、しかも共通点の説明に
+    コンサルタントの former_companies を全件列挙していたため、「同じ〇〇出身」という
+    事実と異なる紹介文の原因になっていた。ここでは
+      - 一般名（generic_company_terms）は企業名一致の根拠にしない
+      - 実際に一致した企業名のみを返す
+    ことで、プロンプトへ渡る共通点を事実に限定する。
+    """
+    generic = _generic_terms(rules)
+    specific = [c for c in former_companies if c and _norm(c) not in generic]
+    return _contains_any(candidate_companies, specific)
 
 
 def candidate_flags(candidate: Candidate, rules: dict | None = None) -> dict[str, bool]:
@@ -58,21 +135,35 @@ def candidate_flags(candidate: Candidate, rules: dict | None = None) -> dict[str
     return {"is_recruit": is_recruit, "is_insurance": is_insurance}
 
 
-def _common_points(candidate: Candidate, c: ConsultantProfile) -> list[str]:
+def _common_points(candidate: Candidate, c: ConsultantProfile,
+                   rules: dict | None = None) -> list[str]:
+    """候補者とコンサルタントの共通点を、**実際に一致した値だけ**で説明する。
+
+    説明文がそのままプロンプトの根拠になるため、一致していない企業名・大学名を
+    含めてはならない（含めるとモデルが事実と異なる共通点を書く）。
+    """
     points: list[str] = []
 
-    company_hits = _contains_any(candidate.all_companies(), c.former_companies)
+    company_hits = _company_hits(candidate.all_companies(), c.former_companies, rules)
     if company_hits:
-        points.append(f"前職企業の共通点（{ '・'.join(c.former_companies) }）")
+        points.append(f"前職企業の共通点（{'・'.join(company_hits)}）")
 
-    if candidate.industry and _contains_any([candidate.industry], c.industries):
-        points.append(f"業界の共通点（{candidate.industry}）")
+    industry_hits = _contains_any([candidate.industry], c.industries) if candidate.industry else []
+    if industry_hits:
+        points.append(f"業界の共通点（{'・'.join(industry_hits)}）")
 
-    if candidate.university and _contains_any([candidate.university], c.universities):
-        points.append(f"出身大学の共通点（{candidate.university}）")
+    university_hits = (
+        _contains_any([candidate.university], c.universities) if candidate.university else []
+    )
+    if university_hits:
+        points.append(f"出身大学の共通点（{'・'.join(university_hits)}）")
 
-    if candidate.job_function and _contains_any([candidate.job_function], c.roles):
-        points.append(f"職種・役割の共通点（{candidate.job_function}）")
+    # 役職名（部長・課長など）は職種の共通点ではないため根拠にしない。
+    stop = _role_stopwords(rules)
+    roles = [r for r in c.roles if _norm(r) not in stop]
+    role_hits = _contains_any([candidate.job_function], roles) if candidate.job_function else []
+    if role_hits:
+        points.append(f"職種・役割の共通点（{'・'.join(role_hits)}）")
 
     return points
 
@@ -83,11 +174,13 @@ def match_consultants(
     rules: dict | None = None,
 ) -> list[ConsultantMatch]:
     consultants = consultants if consultants is not None else load_consultants()
+    # 署名者本人（代表取締役社長）等は紹介対象にしない。
+    consultants = _visible_consultants(consultants, rules)
     flags = candidate_flags(candidate, rules)
     matches: dict[str, ConsultantMatch] = {}
 
     for c in consultants:
-        points = _common_points(candidate, c)
+        points = _common_points(candidate, c, rules)
         category = "general"
 
         # 特別ルール: 出身カテゴリ一致は共通点が無くてもマッチさせる。
@@ -135,25 +228,51 @@ def render_matches_block(matches: list[ConsultantMatch]) -> str:
     lines = []
     for m in matches:
         c = m.consultant
+        # 【重要】紹介文に使ってよい事実（前職・職種・専門・出身大学）をここで必ず渡す。
+        # これらを渡していなかったため、モデルは各コンサルタントの経歴を知らないまま
+        # blurb を書かされ、前職や実績を創作していた（虚偽混入の構造的原因）。
         lines.append(
             f"- consultant_id: {c.id}｜氏名: {c.display_name}｜"
-            f"{_label_for(m)}: {'、'.join(m.common_points)}｜紹介URL: {c.profile_url}"
+            f"{_label_for(m)}: {'、'.join(m.common_points)}｜"
+            f"前職: {'・'.join(c.former_companies) or '非公開'}｜"
+            f"職種: {'・'.join(c.roles) or '非公開'}｜"
+            f"専門: {'・'.join(c.specialties) or '非公開'}｜"
+            f"出身大学: {'・'.join(c.universities) or '非公開'}｜"
+            f"紹介URL: {c.profile_url}"
         )
     return "\n".join(lines)
 
 
-def _soft_points(candidate: Candidate, c: ConsultantProfile) -> list[str]:
+def _soft_points(candidate: Candidate, c: ConsultantProfile,
+                 rules: dict | None = None) -> list[str]:
     """共通点マッチが無い候補者向けの「近い経歴」ソフト一致を返す（誇張しない範囲で）。
 
     職種（現職役職含む）・業界の近さを、コンサルタントの roles/specialties/industries と
     照合する。断定的な「共通点」ではなく、自然に紹介へつなげるための素材。
     """
+    # 「近い経歴」は共通点を断定しないラベルのため後方一致も許す（例: 候補者「法人営業」↔
+    # コンサルの専門「法人営業支援」）。ただし
+    #  - 役職語（部長・課長など）は職種の近さの根拠にしない
+    #  - 2文字以下の語（「営業」「管理」等）は何にでも当たるため根拠にしない
+    #  - 表示は「実際に一致した値」にする（無関係な値をラベルに出さない）
+    # の3点を守る。従来は候補者の役職「営業課長」が専門「営業」に当たったのに、ラベルには
+    # 無関係な job_function（例「生産管理」）を出しており、根拠として誤りだった。
+    stop = _role_stopwords(rules)
+
+    def _usable(values: list[str]) -> list[str]:
+        return [v for v in values if v and len(_norm(v)) >= 3 and _norm(v) not in stop]
+
     pts: list[str] = []
-    if _contains_any([candidate.job_function, candidate.current_title],
-                     c.roles + c.specialties):
-        pts.append(f"職種の近さ（{candidate.job_function or candidate.current_title}）")
-    if candidate.industry and _contains_any([candidate.industry], c.industries + c.specialties):
-        pts.append(f"業界での近い経歴（{candidate.industry}）")
+    role_hits = _contains_any(_usable([candidate.job_function, candidate.current_title]),
+                              _usable(c.roles + c.specialties), allow_reverse=True)
+    if role_hits:
+        pts.append(f"職種の近さ（{'・'.join(role_hits)}）")
+    if candidate.industry:
+        industry_hits = _contains_any(_usable([candidate.industry]),
+                                      _usable(c.industries + c.specialties),
+                                      allow_reverse=True)
+        if industry_hits:
+            pts.append(f"業界での近い経歴（{'・'.join(industry_hits)}）")
     return pts
 
 
@@ -205,13 +324,16 @@ def select_intro_matches(
     # 保証人数(min_n)に満たない場合のみ、下記で min_n まで補充する。
     ids = {m.consultant.id for m in selected}
     pool = consultants if consultants is not None else load_consultants()
+    # 署名者本人（岩渕）を補充で拾わない。従来は pool の先頭が代表取締役社長だったため、
+    # 共通点の無い候補者では必ず「差出人本人を第三者として紹介する」不自然な文面になっていた。
+    pool = _visible_consultants(pool, rules)
 
     # ② 近い経歴（ソフトマッチ）を関連度（一致数）の高い順に補充。
     soft: list[tuple[int, ConsultantMatch]] = []
     for c in pool:
         if c.id in ids:
             continue
-        pts = _soft_points(candidate, c)
+        pts = _soft_points(candidate, c, rules)
         if pts:
             soft.append((len(pts), ConsultantMatch(
                 consultant=c, common_points=pts, category="soft")))

@@ -231,3 +231,104 @@ def test_render_consultant_intro_section_can_skip_missing_when_disabled():
 
 def test_render_consultant_intro_section_empty_matches_yields_empty_string():
     assert render_consultant_intro_section("導入文", {"a": "紹介文"}, []) == ""
+
+
+# --- 文面の虚偽混入を防ぐための照合ルール（実運用の苦情に対する回帰テスト）---
+
+def test_common_points_lists_only_actually_matched_companies():
+    # 従来は「実際に一致した社名」ではなく former_companies を全件列挙しており、
+    # 一致していない会社まで『候補者と同じ出身企業』としてプロンプトに渡っていた。
+    c = ConsultantProfile(id="x1", display_name="X", profile_url="u",
+                          former_companies=["リクルート", "会計保守コンサルティング会社"])
+    cand = make_candidate(current_company="株式会社リクルート", prior_companies=[],
+                          industry="", university="", job_function="")
+    block = render_matches_block(match_consultants(cand, consultants=[c]))
+    assert "前職企業の共通点（リクルート）" in block
+    # 「共通点」ラベルの括弧内には一致した社名だけを出す（一致していない会社を含めない）。
+    common_label = block.split("共通点: ")[1].split("｜")[0]
+    assert common_label == "前職企業の共通点（リクルート）"
+    assert "会計保守" not in common_label
+    # 一方、blurb の材料として「前職」欄には本人の実際の職歴を全て渡してよい（事実のため）。
+    assert "前職: リクルート・会計保守コンサルティング会社" in block
+
+
+def test_generic_company_terms_do_not_create_fake_commonality():
+    # 「サービス業」等の業種の総称は企業名の共通点にしない（候補者の社名と部分一致するため）。
+    c = ConsultantProfile(id="x2", display_name="Y", profile_url="u",
+                          former_companies=["サービス業"])
+    cand = make_candidate(current_company="株式会社サービスプロダクト", prior_companies=[],
+                          industry="", university="", job_function="")
+    assert match_consultants(cand, consultants=[c]) == []
+
+
+def test_reverse_substring_does_not_match_different_company():
+    # 候補者「トヨタ自動車」（メーカー本体）と「トヨタ自動車直系の自動車販売会社」は別会社。
+    c = ConsultantProfile(id="x3", display_name="Z", profile_url="u",
+                          former_companies=["トヨタ自動車直系の自動車販売会社"])
+    cand = make_candidate(current_company="トヨタ自動車", prior_companies=[],
+                          industry="", university="", job_function="")
+    assert match_consultants(cand, consultants=[c]) == []
+
+
+def test_role_stopwords_exclude_job_titles_from_commonality():
+    # 役職名（課長・部長）が一致しても「職種の共通点」にはしない。
+    c = ConsultantProfile(id="x4", display_name="W", profile_url="u",
+                          roles=["課長", "法人営業"])
+    cand = make_candidate(current_company="無関係", prior_companies=[], industry="",
+                          university="", job_function="課長")
+    assert match_consultants(cand, consultants=[c]) == []
+    # 職種そのものが一致する場合は共通点として成立する。
+    cand2 = make_candidate(current_company="無関係", prior_companies=[], industry="",
+                           university="", job_function="法人営業")
+    assert [m.consultant.id for m in match_consultants(cand2, consultants=[c])] == ["x4"]
+
+
+def test_render_matches_block_includes_consultant_facts():
+    # blurb の材料（前職・職種・専門・出身大学）をプロンプトへ渡す。渡していなかったため
+    # モデルが経歴を知らないまま紹介文を書き、事実を創作していた。
+    c = ConsultantProfile(id="x5", display_name="井ノ上", profile_url="u",
+                          former_companies=["富士通"], roles=["ソフトウェア開発"],
+                          specialties=["DX"], universities=["鹿児島大学"])
+    cand = make_candidate(current_company="富士通", prior_companies=[], industry="",
+                          university="", job_function="")
+    block = render_matches_block(match_consultants(cand, consultants=[c]))
+    for fact in ("前職: 富士通", "職種: ソフトウェア開発", "専門: DX", "出身大学: 鹿児島大学"):
+        assert fact in block
+
+
+def test_signer_is_excluded_from_matching_and_fallback():
+    # 署名者（代表取締役社長・岩渕）は差出人本人なので紹介対象にしない。
+    rules = {"matching": {"exclude_consultant_ids": ["iwabuchi"],
+                          "exclude_consultant_names": ["岩渕"],
+                          "min_intro_consultants": 1, "max_intro_consultants": 3}}
+    pool = [
+        ConsultantProfile(id="iwabuchi", display_name="岩渕 龍正（代表取締役社長）",
+                          profile_url="u0", specialties=["マーケティング"]),
+        ConsultantProfile(id="other", display_name="他 太郎", profile_url="u1",
+                          specialties=["医院経営"]),
+    ]
+    cand = make_candidate(current_company="無関係", prior_companies=[], industry="",
+                          university="", job_function="")
+    matches = match_consultants(cand, consultants=pool, rules=rules)
+    assert all(m.consultant.id != "iwabuchi" for m in matches)
+    # 共通点ゼロでも fallback で岩渕を拾わず、他のコンサルタントで保証人数を満たす。
+    intro = select_intro_matches(cand, matches, rules=rules, consultants=pool)
+    assert [m.consultant.id for m in intro] == ["other"]
+
+
+def test_signer_excluded_by_name_even_if_id_changed():
+    # import-consultants は id を振り直すため、氏名でも除外できること。
+    rules = {"matching": {"exclude_consultant_ids": ["iwabuchi"],
+                          "exclude_consultant_names": ["岩渕"],
+                          "min_intro_consultants": 1, "max_intro_consultants": 3}}
+    pool = [
+        ConsultantProfile(id="c001", display_name="岩渕 龍正（代表取締役社長）",
+                          profile_url="u0", specialties=["マーケティング"]),
+        ConsultantProfile(id="c002", display_name="他 太郎", profile_url="u1",
+                          specialties=["医院経営"]),
+    ]
+    cand = make_candidate(current_company="無関係", prior_companies=[], industry="",
+                          university="", job_function="")
+    intro = select_intro_matches(cand, match_consultants(cand, consultants=pool, rules=rules),
+                                 rules=rules, consultants=pool)
+    assert [m.consultant.id for m in intro] == ["c002"]
