@@ -85,6 +85,43 @@ def test_sync_writes_all_sheets_and_checkbox_rule(tmp_path):
     assert report.charts == 6
 
 
+def test_weekly_sheet_has_channel_breakdown_after_chart_columns(tmp_path):
+    # 週次シートに送信内訳（通常スカウト/ピックアップ/内訳不明）が出ること。
+    # かつ、コンボチャートが参照する列0/1/3の並びが変わっていないこと（内訳は末尾追加）。
+    repo = _repo_with_sent(tmp_path, members=("BU1",))
+    # BU1 は platinum。ピックアップ送信の候補者を1名足す。
+    cand = make_candidate(member_no="BU9")
+    repo.upsert_candidate(cand, check_eligibility(cand))
+    repo.record_generated(GeneratedScout(
+        member_no="BU9", first=ScoutContent(subject="s", body="b"),
+        resend=ScoutContent(subject="s2", body="b2"), model="m", tone_key="early30s"))
+    repo.mark_sent("BU9", "first", 5, channel="pickup")
+    # 送信日時を集計対象週（2026-07-13〜19）に固定して決定的にする（mark_sent は現在時刻）。
+    repo.conn.execute("UPDATE sent_log SET sent_at='2026-07-14T10:00:00'")
+    repo.conn.commit()
+
+    sheets = FakeSheets()
+    sync_analytics(repo, sheets, now=datetime(2026, 7, 16, 12, 0),
+                   with_charts=False, trend_fn=None)
+    repo.close()
+
+    header = sheets.data[WEEKLY_SHEET][0]
+    # チャートが参照する先頭列の並びは不変。
+    assert header[:6] == ["週", "送信数", "返信数", "返信率(%)", "累計送信", "累計返信率(%)"]
+    # 内訳列は末尾に追加されている。
+    assert "通常スカウト送信" in header and "ピックアップ送信" in header
+    assert "内訳不明送信" in header
+    assert header.index("通常スカウト送信") >= 6
+    i_normal = header.index("通常スカウト送信")
+    i_pickup = header.index("ピックアップ送信")
+    # 当週の行を取り、内訳が送信数と一致することを確認。
+    data_rows = [r for r in sheets.data[WEEKLY_SHEET][1:] if r and str(r[0]).startswith("2026-W")]
+    total_sent = sum(int(r[1]) for r in data_rows)
+    assert total_sent == 2
+    assert sum(int(r[i_normal]) for r in data_rows) == 1   # platinum → 通常スカウト
+    assert sum(int(r[i_pickup]) for r in data_rows) == 1   # pickup
+
+
 def test_sync_reads_manual_input_column_not_display_column(tmp_path):
     repo = _repo_with_sent(tmp_path)
     # 前回同期のシートを再現: 表示列「返信」は自動判定の投影（読み戻さない）。

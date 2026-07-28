@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 
@@ -63,6 +63,23 @@ _CHANNEL_LABELS = {
 
 def channel_label(v: str) -> str:
     return _CHANNEL_LABELS.get(v, v or "不明")
+
+
+# 送信枠を週次/月次の内訳グループへ畳む。通常スカウト = 検索スカウト（プラチナ枠・通常枠）、
+# ピックアップ = 本日のピックアップ（無料枠）。
+_CHANNEL_GROUPS = {"platinum": "normal", "normal": "normal", "pickup": "pickup"}
+# 内訳の表示順と見出し（unknown は送信数のみ別列で出す）。
+GROUP_ORDER = ("normal", "pickup")
+GROUP_LABELS = {"normal": "通常スカウト", "pickup": "ピックアップ", "unknown": "内訳不明"}
+
+
+def channel_group(channel: str) -> str:
+    """送信枠を内訳グループ（normal / pickup / unknown）に畳む。
+
+    channel が空の過去データ（backfill 由来で送信枠を記録していない分）は unknown とし、
+    どちらかへ勝手に寄せない（送信数 = 通常 + ピックアップ + 内訳不明 が常に成り立つ）。
+    """
+    return _CHANNEL_GROUPS.get(channel, "unknown")
 
 
 def parse_db_datetime(s: str | None) -> datetime | None:
@@ -151,10 +168,39 @@ class PeriodStat:
     start: date
     sent: int
     replied: int
+    # 送信枠の内訳（normal=通常スカウト / pickup=ピックアップ / unknown=内訳不明）。
+    sent_by_group: dict[str, int] = field(default_factory=dict)
+    replied_by_group: dict[str, int] = field(default_factory=dict)
 
     @property
     def rate(self) -> float:
         return self.replied / self.sent if self.sent else 0.0
+
+    def group_sent(self, group: str) -> int:
+        return self.sent_by_group.get(group, 0)
+
+    def group_replied(self, group: str) -> int:
+        return self.replied_by_group.get(group, 0)
+
+    def group_rate(self, group: str) -> float:
+        sent = self.group_sent(group)
+        return self.group_replied(group) / sent if sent else 0.0
+
+
+def _period_stat(label: str, start: date, recs: list[SentRecord]) -> PeriodStat:
+    """1期間分の集計（送信枠の内訳つき）を組み立てる。"""
+    sent_by: dict[str, int] = {}
+    replied_by: dict[str, int] = {}
+    for r in recs:
+        g = channel_group(r.channel)
+        sent_by[g] = sent_by.get(g, 0) + 1
+        if r.replied:
+            replied_by[g] = replied_by.get(g, 0) + 1
+    return PeriodStat(
+        label=label, start=start,
+        sent=len(recs), replied=sum(1 for r in recs if r.replied),
+        sent_by_group=sent_by, replied_by_group=replied_by,
+    )
 
 
 def _week_start(d: date) -> date:
@@ -179,12 +225,7 @@ def weekly_summary(records: list[SentRecord], *, now: datetime,
         ws = _week_start(rec.first_sent_at.date())
         if ws in buckets:
             buckets[ws].append(rec)
-    return [
-        PeriodStat(label=_week_label(s), start=s,
-                   sent=len(buckets[s]),
-                   replied=sum(1 for r in buckets[s] if r.replied))
-        for s in starts
-    ]
+    return [_period_stat(_week_label(s), s, buckets[s]) for s in starts]
 
 
 def _month_start(d: date) -> date:
@@ -209,12 +250,7 @@ def monthly_summary(records: list[SentRecord], *, now: datetime,
         ms = _month_start(rec.first_sent_at.date())
         if ms in buckets:
             buckets[ms].append(rec)
-    return [
-        PeriodStat(label=f"{s.year}-{s.month:02d}", start=s,
-                   sent=len(buckets[s]),
-                   replied=sum(1 for r in buckets[s] if r.replied))
-        for s in starts
-    ]
+    return [_period_stat(f"{s.year}-{s.month:02d}", s, buckets[s]) for s in starts]
 
 
 @dataclass

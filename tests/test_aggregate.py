@@ -179,6 +179,48 @@ def test_segments_by_weekday_and_hour_rates():
     assert hr["15〜18時"].rate == 1.0 and hr["18〜21時"].rate == 0.0
 
 
+def test_channel_group_folds_channels():
+    from bizreach_scout.analytics.aggregate import channel_group
+
+    assert channel_group("platinum") == "normal"   # 検索スカウト（プラチナ枠）
+    assert channel_group("normal") == "normal"
+    assert channel_group("pickup") == "pickup"     # 本日のピックアップ（無料枠）
+    assert channel_group("") == "unknown"          # 送信枠未記録の過去データ
+    assert channel_group("nazo") == "unknown"      # 未知の値も勝手に寄せない
+
+
+def test_weekly_summary_breaks_down_by_channel():
+    now = datetime(2026, 7, 16, 12, 0)   # 木曜（週は 7/13〜7/19）
+    records = [
+        _rec("BU1", "2026-07-14T10:00:00", replied=True, channel="platinum"),
+        _rec("BU2", "2026-07-14T11:00:00", replied=False, channel="platinum"),
+        _rec("BU3", "2026-07-15T10:00:00", replied=True, channel="pickup"),
+        _rec("BU4", "2026-07-15T11:00:00", replied=False, channel=""),  # 過去データ
+    ]
+    wk = weekly_summary(records, now=now, weeks=1)[0]
+    assert wk.sent == 4 and wk.replied == 2
+    # 内訳: 通常2(返信1) / ピックアップ1(返信1) / 不明1(返信0)。
+    assert wk.group_sent("normal") == 2 and wk.group_replied("normal") == 1
+    assert wk.group_sent("pickup") == 1 and wk.group_replied("pickup") == 1
+    assert wk.group_sent("unknown") == 1 and wk.group_replied("unknown") == 0
+    assert wk.group_rate("pickup") == 1.0 and wk.group_rate("normal") == 0.5
+    # 送信数 = 内訳の合計（勝手にどちらかへ寄せない）。
+    assert wk.sent == sum(wk.group_sent(g) for g in ("normal", "pickup", "unknown"))
+    # 送信0のグループの率は0（ゼロ除算しない）。
+    assert weekly_summary([], now=now, weeks=1)[0].group_rate("pickup") == 0.0
+
+
+def test_monthly_summary_breaks_down_by_channel():
+    now = datetime(2026, 7, 16)
+    records = [
+        _rec("BU1", "2026-07-01T00:00:00", replied=True, channel="pickup"),
+        _rec("BU2", "2026-07-02T00:00:00", replied=False, channel="platinum"),
+    ]
+    m = monthly_summary(records, now=now, months=1)[0]
+    assert m.group_sent("pickup") == 1 and m.group_replied("pickup") == 1
+    assert m.group_sent("normal") == 1 and m.group_replied("normal") == 0
+
+
 def test_empty_records_safe():
     now = datetime(2026, 7, 16)
     assert all(s.sent == 0 for s in weekly_summary([], now=now, weeks=4))
