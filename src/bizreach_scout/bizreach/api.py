@@ -380,6 +380,9 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     foreign_parts += [_ja(q.get("name")) + " " + _en(q.get("name")) for q in quals]
     foreign_text = "\n".join(p for p in foreign_parts if p and p.strip())
 
+    # 希望条件（興味のある働き方・希望職種・希望業界）。取得できなければ空のまま。
+    desired = _extract_desired(resume)
+
     return Candidate(
         member_no=member_no or mrccid,
         mrccid=mrccid,
@@ -396,7 +399,9 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         job_function=current_title,
         salary_current=_income_label(resume.get("income")),
         salary_desired=_income_label((resume.get("desiredConditions") or {}).get("income")),
-        **_extract_desired(resume),
+        work_style=desired["work_style"],
+        desired_jobs=desired["desired_jobs"],
+        desired_industries=desired["desired_industries"],
         summary=summary,
         raw_profile=raw_profile,
         foreign_text=foreign_text,
