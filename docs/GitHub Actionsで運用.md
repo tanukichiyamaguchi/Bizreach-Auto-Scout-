@@ -85,9 +85,19 @@ base64 -w0 data/sessions/bizreach_state.json   # 出力された文字列をコ�
 `.github/workflows/scout.yml` の `schedule` は毎日 **16:09 JST（主）** と **18:39 JST（予備）** の2回起動します。
 定期実行は Variables の値を使うため、`BIZSCOUT_DRY_RUN=true` の間は**送信されません**。
 
-> **土曜日(JST)はピックアップ（無料枠）のみ**送付します。検索スカウト（プラチナ枠）＋再送は
-> スキップされます（`SKIP_SEARCH` による曜日ガード）。返信の自動検知・分析同期は土曜も通常どおり動きます。
-> 手動実行（Run workflow）は明示操作のため曜日ガードの対象外で、`mode=scout` を選べば土曜でも検索スカウトを送れます。
+> **土日祝(JST)は通常スカウト（検索スカウト＋再送）を送信しません。ピックアップ（無料枠）は毎日送信します。**
+> 判定は `config/scout_rules.yaml` の `schedule` セクションに基づき `bizscout check-schedule` が行います
+> （祝日は振替休日・国民の休日も判定）。返信の自動検知・分析同期は土日祝も通常どおり動きます。
+> 手動実行（Run workflow）は明示操作のため対象外で、`mode=scout` を選べば土日祝でも通常スカウトを送れます。
+>
+> 休止日の調整（`config/scout_rules.yaml`）:
+> ```yaml
+> schedule:
+>   search_skip_weekdays: [6, 7]   # 6=土, 7=日（1=月）
+>   search_skip_holidays: true     # 日本の祝日も休止
+>   search_skip_dates: []          # 年末年始など追加の休止日（YYYY-MM-DD）
+> ```
+> 本日送信されるかは `bizscout check-schedule --kind search` で確認できます。
 
 > GitHub の `schedule` は毎時00分が最も混雑し、数時間の遅延やまれにドロップが起こり得るベストエフォート仕様です。
 > そのため実行時刻を00分から外し、さらに予備の時刻を用意して「その日ぜんぶ未実行」を防いでいます。

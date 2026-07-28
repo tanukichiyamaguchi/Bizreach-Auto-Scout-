@@ -79,6 +79,7 @@ def test_none_default_fields_are_dropped_by_exclude_none():
 def test_empty_input_yields_full_defaults():
     """空 dict でも検証が通り、全セクションがモデルのデフォルトで埋まる（起動を妨げない）。"""
     out = validate_rules({})
-    assert set(out) == {"eligibility", "tone_profiles", "resend", "constraints", "matching"}
+    assert set(out) == {"eligibility", "tone_profiles", "resend", "constraints",
+                        "matching", "schedule"}
     assert out["eligibility"]["min_age"] == 27
     assert out["resend"]["after_days"] == 5
