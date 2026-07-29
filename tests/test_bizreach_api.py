@@ -346,3 +346,60 @@ def test_extract_desired_handles_missing_and_odd_shapes():
         {"bizreachUserId": "BU5", "mrccid": "m5",
          "desiredConditions": {"workStyle": "リモート可"}}, "m5")
     assert last.work_style == "リモート可"
+
+
+def test_extract_desired_uses_production_key_names():
+    """本番で確認済みの desiredConditions 実キー（2026-07-28 ログ）から全項目を取る。
+
+    実キー: considerableAbroadEmploymentTypes / income / industries / jobCategories /
+    jobChangePeriod / otherDesiredText / workLocations / workStyles
+    """
+    from bizreach_scout.bizreach.api import resume_to_candidate
+
+    resume = {
+        "bizreachUserId": "BU6", "mrccid": "m6",
+        # トップレベル（＝経験）は希望として拾わない。
+        "industries": [{"ja": "小売"}],
+        "jobCategories": [{"ja": "店舗運営"}],
+        "desiredConditions": {
+            "income": "Upper800",
+            "workStyles": [{"ja": "転勤なし"}, {"ja": "フレックス"}],
+            "jobCategories": [{"ja": "経営コンサルタント"}],
+            "industries": [{"ja": "コンサルティング"}],
+            "workLocations": [{"ja": "東京都"}, {"ja": "神奈川県"}],
+            "otherDesiredText": "専門性を高められる環境を希望します。",
+            "jobChangePeriod": "3ヶ月以内",
+        },
+    }
+    cand = resume_to_candidate(resume, "m6")
+    assert cand.work_style == "転勤なし、フレックス"
+    assert cand.desired_jobs == "経営コンサルタント"
+    assert cand.desired_industries == "コンサルティング"
+    assert cand.desired_locations == "東京都、神奈川県"
+    assert cand.desired_other == "専門性を高められる環境を希望します。"
+
+
+def test_extract_desired_truncates_long_free_text():
+    from bizreach_scout.bizreach.api import _DESIRED_OTHER_MAX, resume_to_candidate
+
+    cand = resume_to_candidate(
+        {"bizreachUserId": "BU7", "mrccid": "m7",
+         "desiredConditions": {"otherDesiredText": "あ" * (_DESIRED_OTHER_MAX + 50)}}, "m7")
+    assert cand.desired_other == "あ" * _DESIRED_OTHER_MAX + "…"
+
+
+def test_render_candidate_profile_omits_empty_desired_fields():
+    """希望が取れていない項目はプロンプトに出さない（モデルが推測で書くのを防ぐ）。"""
+    from bizreach_scout.bizreach.api import resume_to_candidate
+    from bizreach_scout.generation.prompt import render_candidate_profile
+
+    blank = render_candidate_profile(
+        resume_to_candidate({"bizreachUserId": "BU8", "mrccid": "m8"}, "m8"))
+    assert "希望勤務地" not in blank and "その他の希望" not in blank
+
+    filled = render_candidate_profile(resume_to_candidate(
+        {"bizreachUserId": "BU9", "mrccid": "m9",
+         "desiredConditions": {"workLocations": [{"ja": "大阪府"}],
+                               "otherDesiredText": "土日休み希望"}}, "m9"))
+    assert "- 希望勤務地: 大阪府" in filled
+    assert "- その他の希望（本人記入）: 土日休み希望" in filled

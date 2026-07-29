@@ -118,20 +118,20 @@ _logged_desired_keys = False
 # 重要: これらは **desiredConditions（希望条件）配下のみ** から取る。レジュメの
 # トップレベルにある industries / jobCategories は「経験してきた業界・職種」であり
 # 「希望」ではないため、希望として扱うと文面に事実と異なる内容が入る。
-# desiredConditions の中身は income 以外が実データ未確認のため、候補キーを複数試し、
-# 取れなければ空のままにする（空ならプロンプトに出ず、モデルは言及できない＝嘘を防ぐ）。
-_WORK_STYLE_KEYS = (
-    "workStyles", "workStyle", "interestedWorkStyles", "interestedWorkStyle",
-    "desiredWorkStyles", "preferredWorkStyles", "workStyleTypes", "workingStyles",
-    "employmentTypes", "workPreferences",
-)
-_DESIRED_JOB_KEYS = (
-    "desiredJobCategories", "desiredJobs", "desiredOccupations",
-    "jobCategories", "jobTypes", "occupations", "jobs",
-)
-_DESIRED_INDUSTRY_KEYS = (
-    "desiredIndustries", "desiredIndustryCategories", "industries", "industryNames",
-)
+# desiredConditions の実キーは本番ログ（2026-07-28）で確認済みで、以下の8つ:
+#   considerableAbroadEmploymentTypes / income / industries / jobCategories /
+#   jobChangePeriod / otherDesiredText / workLocations / workStyles
+# 確認済みキーを先頭に置き、表記ゆれ対策のエイリアスを1つずつ残す（将来キー名が
+# 変わっても _extract_desired のキー一覧ログで気づける）。取れなければ空のままにする
+# （空ならプロンプトに出ず、モデルは言及できない＝嘘を防ぐ）。
+_WORK_STYLE_KEYS = ("workStyles", "workStyle")
+_DESIRED_JOB_KEYS = ("jobCategories", "desiredJobCategories")
+_DESIRED_INDUSTRY_KEYS = ("industries", "desiredIndustries")
+_DESIRED_LOCATION_KEYS = ("workLocations", "workLocation")
+_DESIRED_OTHER_KEYS = ("otherDesiredText", "otherDesired")
+
+# 自由記述（その他の希望）はレジュメによっては非常に長いため、プロンプトに載せる分だけ残す。
+_DESIRED_OTHER_MAX = 400
 
 
 def _flatten_labels(val: object, depth: int = 0) -> str:
@@ -180,13 +180,17 @@ def _pick_desired(desired: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
-def _extract_desired(resume: dict) -> dict[str, str]:
-    """希望条件（興味のある働き方・希望職種・希望業界）を抽出する。
+_DESIRED_FIELDS = ("work_style", "desired_jobs", "desired_industries",
+                   "desired_locations", "desired_other")
 
-    desiredConditions の実データ構造は income 以外が未確認のため、初回だけキー一覧を
-    ログに出して次回の特定材料にする（値は出さない＝個人情報を残さない）。
-    取得できなければ空文字のままとし、プロンプトにも出さない（モデルが推測で
-    「リモート希望とのことですが」等と書く事故を防ぐ）。
+
+def _extract_desired(resume: dict) -> dict[str, str]:
+    """希望条件（働き方・職種・業界・勤務地・その他の自由記述）を抽出する。
+
+    キー一覧は初回だけログに出す（値は出さない＝個人情報を残さない）。ビズリーチ側で
+    キー名が変わったらこのログで気づける。取得できなければ空文字のままとし、
+    プロンプトにも出さない（モデルが推測で「リモート希望とのことですが」等と
+    書く事故を防ぐ）。
     """
     global _logged_desired_keys
     desired = resume.get("desiredConditions")
@@ -195,11 +199,16 @@ def _extract_desired(resume: dict) -> dict[str, str]:
                     sorted(desired.keys()))
         _logged_desired_keys = True
     if not isinstance(desired, dict):
-        return {"work_style": "", "desired_jobs": "", "desired_industries": ""}
+        return dict.fromkeys(_DESIRED_FIELDS, "")
+    other = _pick_desired(desired, _DESIRED_OTHER_KEYS)
+    if len(other) > _DESIRED_OTHER_MAX:
+        other = other[:_DESIRED_OTHER_MAX] + "…"
     return {
         "work_style": _pick_desired(desired, _WORK_STYLE_KEYS),
         "desired_jobs": _pick_desired(desired, _DESIRED_JOB_KEYS),
         "desired_industries": _pick_desired(desired, _DESIRED_INDUSTRY_KEYS),
+        "desired_locations": _pick_desired(desired, _DESIRED_LOCATION_KEYS),
+        "desired_other": other,
     }
 
 
@@ -402,6 +411,8 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         work_style=desired["work_style"],
         desired_jobs=desired["desired_jobs"],
         desired_industries=desired["desired_industries"],
+        desired_locations=desired["desired_locations"],
+        desired_other=desired["desired_other"],
         summary=summary,
         raw_profile=raw_profile,
         foreign_text=foreign_text,

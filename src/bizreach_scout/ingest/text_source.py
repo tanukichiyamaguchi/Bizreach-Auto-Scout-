@@ -36,6 +36,8 @@ _LABELS: list[tuple[str, str]] = [
     (r"(?:希望職種)", "desired_jobs"),
     (r"(?:希望業界|希望業種)", "desired_industries"),
     (r"(?:興味のある働き方|働き方)", "work_style"),
+    (r"(?:希望勤務地|勤務地)", "desired_locations"),
+    (r"(?:その他の希望|その他希望)", "desired_other"),
 ]
 
 
@@ -81,6 +83,8 @@ def parse_profile_text(chunk: str) -> Candidate | None:
         desired_jobs=values.get("desired_jobs", ""),
         desired_industries=values.get("desired_industries", ""),
         work_style=values.get("work_style", ""),
+        desired_locations=values.get("desired_locations", ""),
+        desired_other=values.get("desired_other", ""),
         raw_profile=chunk.strip(),
         source="text",
     )
