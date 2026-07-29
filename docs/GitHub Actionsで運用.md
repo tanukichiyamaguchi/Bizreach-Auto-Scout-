@@ -67,7 +67,7 @@ base64 -w0 data/sessions/bizreach_state.json   # 出力された文字列をコ�
 | `BIZSCOUT_MAX` | `30` | 1回の最大処理件数（検索スカウト用） |
 | `BIZSCOUT_PICKUP_MAX` | `50` | ピックアップの最大処理件数（未設定なら50）。**本日の全ピックアップを開封（既読化）するため、日次の対象件数（通常10〜15件）より十分大きくしておく**。ピックアップ送信は無料枠のため `BIZSCOUT_MAX_SENDS_PER_RUN` の制限を受けず、対象条件を満たす全員へ送信される |
 | `BIZSCOUT_MAX_SENDS_PER_RUN` | `20` | 1回の送信上限（検索スカウト・再送用。ピックアップには適用されない） |
-| `BIZSCOUT_MODEL` | `claude-opus-4-8` | 生成モデル（任意） |
+| `BIZSCOUT_MODEL` | `claude-opus-5` | 生成モデル（任意）。**Opus は Opus 5 を使う方針**のため、旧 Opus のモデル名が残っていても `claude-opus-5` に読み替えて実行します（`bizscout doctor` の「生成モデル」行に読み替えを表示） |
 | `BIZSCOUT_GSHEET_SPREADSHEET_ID` | `1AbC...` | スカウト分析の出力先スプレッドシートID（**任意**・`docs/スカウト分析.md` 参照） |
 | `BIZSCOUT_EXPECT_STATE` | `true` | **状態DB消失ガード（推奨）。** 送信履歴DBが空のまま実送信しようとしたら中断する（下記「状態DBが消えたときの復旧」参照）。**初回運用のときだけ `false`（またはVariable未設定）**にし、一度でも送信されたら `true` にする |
 

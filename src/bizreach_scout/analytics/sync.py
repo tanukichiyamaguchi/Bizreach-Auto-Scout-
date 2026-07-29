@@ -21,6 +21,7 @@ from .aggregate import (
     standard_segments,
     weekly_summary,
 )
+from .channel_backfill import load_channel_backfill
 from .sheets import SheetsPort
 
 SENT_LOG_SHEET = "送信ログ"
@@ -54,6 +55,7 @@ _GENDER_LABELS = {"male": "男性", "female": "女性", "unknown": "不明", "":
 @dataclass
 class SyncReport:
     backfilled: int = 0
+    channels_filled: int = 0
     manual_merged: int = 0
     members: int = 0
     replied: int = 0
@@ -63,7 +65,8 @@ class SyncReport:
 
     def summary(self) -> str:
         return (f"分析同期: 対象{self.members}名 / 返信{self.replied}名 / "
-                f"backfill+{self.backfilled} / 手動マージ{self.manual_merged}件 / "
+                f"backfill+{self.backfilled} / 送信枠復元+{self.channels_filled} / "
+                f"手動マージ{self.manual_merged}件 / "
                 f"チャート{self.charts}件 / 傾向分析更新={self.trend_refreshed}")
 
 
@@ -172,7 +175,7 @@ def _period_rows(stats: list[PeriodStat], label_header: str) -> list[list[object
     rows.append([])
     rows.append(["※返信は初回送信の週/月に帰属します。直近の期間は返信がまだ届き得るため低めに出ます。"])
     rows.append(["※送信数 = 通常スカウト（プラチナ/通常枠）＋ ピックアップ（無料枠）＋ 内訳不明"
-                 "（送信枠を記録する前の過去データ）。"])
+                 "（送信枠を記録する前の過去分のうち、実行ログからも復元できなかった送信）。"])
     return rows
 
 
@@ -311,6 +314,9 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
 
     # 1. sent_log を自己修復（キャッシュ消失・過去分の補完。冪等）。
     report.backfilled = repo.backfill_sent_log()
+    # 1'. 送信枠を記録する前の過去分に、実行ログから復元した送信枠を埋める（冪等）。
+    #     backfill_sent_log の直後に行う（復元された行も対象にするため）。
+    report.channels_filled = repo.backfill_channels(load_channel_backfill())
 
     # 2. シートの手動チェックを読み戻して DB へマージ（書き換え前に必ず行う）。
     try:

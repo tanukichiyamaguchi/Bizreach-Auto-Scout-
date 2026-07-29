@@ -10,10 +10,23 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import ConsultantProfile
+
+# Opus を使うときは Opus 5 を使う、という運用方針。GitHub の Variables などに
+# 旧 Opus のモデル名が残っていても方針が守られるよう、Opus 系の指定は Opus 5 へ
+# 読み替える（sonnet / haiku 等の指定はコスト選択なのでそのまま尊重する）。
+OPUS_MODEL = "claude-opus-5"
+
+
+def normalize_model(model: str) -> str:
+    """Opus 系のモデル指定を Opus 5 に揃える。それ以外はそのまま返す。"""
+    m = (model or "").strip()
+    if m.startswith("claude-opus-") and m != OPUS_MODEL:
+        return OPUS_MODEL
+    return m
 
 
 def project_root() -> Path:
@@ -35,10 +48,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BIZSCOUT_", extra="ignore")
 
     # Anthropic（API キーは ANTHROPIC_API_KEY を直接参照）
-    model: str = "claude-opus-4-8"
+    model: str = OPUS_MODEL
     max_tokens: int = 16000
     # 拡張思考(extended thinking)の有効化フラグ。>0 で有効、0 でオフ。
-    # 注: Opus 4.8/4.7 では {"type":"enabled","budget_tokens":N} は廃止され400になるため、
+    # 注: 近年の Opus では {"type":"enabled","budget_tokens":N} は廃止され400になるため、
     #     adaptive thinking を使う。深さは thinking_effort(下記)で制御する。
     #     この値は「思考トークン数」ではなく単なる ON/OFF フラグとして扱う。
     thinking_budget_tokens: int = 8000
@@ -58,6 +71,12 @@ class Settings(BaseSettings):
 
     # 再送までの日数は scout_rules.yaml resend.after_days が単一情報源
     # （config.resend_after_days() 経由で参照する）。
+
+    @field_validator("model")
+    @classmethod
+    def _opus_means_opus_5(cls, v: str) -> str:
+        """Opus を使う指定なら Opus 5 に揃える（旧 Opus の指定が残っていても方針を守る）。"""
+        return normalize_model(v)
 
     # ブラウザ（bot検知対策で実ブラウザのUAに寄せる）
     user_agent: str = (

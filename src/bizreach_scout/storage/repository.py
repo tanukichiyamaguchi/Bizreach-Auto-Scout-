@@ -12,6 +12,7 @@ import contextlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -398,6 +399,28 @@ class Repository:
                                      dt.isoformat(timespec="seconds"), backfilled=1)
         after = self.conn.execute("SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"]
         return after - before
+
+    def backfill_channels(self, entries: Iterable[tuple[str, str, str]]) -> int:
+        """送信枠が空の過去ログへ、実行ログから復元した送信枠を埋める（冪等）。
+
+        既に送信枠が入っている行は決して上書きしない（記録済みの実測値が正）。
+        埋めた行数を返す。会員番号はゼロ埋め表記も正準形へ寄せて突き合わせる。
+        """
+        from ..models import normalize_member_no
+
+        filled = 0
+        for member_no, kind, channel in entries:
+            if kind not in ("first", "resend") or not channel:
+                continue
+            cur = self.conn.execute(
+                "UPDATE sent_log SET channel=? "
+                "WHERE member_no=? AND kind=? AND (channel IS NULL OR channel='')",
+                (channel, normalize_member_no(member_no), kind),
+            )
+            filled += cur.rowcount
+        if filled:
+            self.conn.commit()
+        return filled
 
     def analytics_rows(self) -> list[sqlite3.Row]:
         """分析用: 会員単位に first/resend をピボットし replies を LEFT JOIN した行。

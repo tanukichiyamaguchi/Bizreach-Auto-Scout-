@@ -34,7 +34,7 @@ cp .env.example .env
 | 変数 | 意味 |
 |------|------|
 | `ANTHROPIC_API_KEY` | Claude APIキー |
-| `BIZSCOUT_MODEL` | 生成モデル（既定 `claude-opus-4-8`。コスト重視なら sonnet 系） |
+| `BIZSCOUT_MODEL` | 生成モデル（既定 `claude-opus-5`。コスト重視なら sonnet 系）。**Opus を指定する場合は Opus 5 を使う方針**のため、旧 Opus のモデル名を指定しても `claude-opus-5` に読み替えます |
 | `BIZREACH_EMAIL` / `BIZREACH_PASSWORD` | ビズリーチ採用企業アカウント |
 | `BIZSCOUT_DRY_RUN` | `true` で実送信せず文面入力のみ（推奨） |
 | `BIZSCOUT_MAX_SENDS_PER_RUN` | 1実行あたりの送信上限（暴走防止） |

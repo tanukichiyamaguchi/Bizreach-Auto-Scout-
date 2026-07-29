@@ -206,3 +206,31 @@ def test_read_manual_entries_reads_only_input_column():
     assert read_manual_entries([["会員番号", "返信あり"], ["BU1", "TRUE"]]) == []
     assert read_manual_entries([["foo", "bar"]]) == []
     assert read_manual_entries([]) == []
+
+
+def test_sync_fills_missing_channels_from_backfill_table(tmp_path, monkeypatch):
+    """送信枠が空の過去行が、対応表から復元されて週次の内訳に載る。"""
+    from bizreach_scout.analytics import sync as sync_mod
+
+    repo = Repository(db_path=tmp_path / "t.db")
+    # 送信枠を記録する前の過去分（channel が空）を2件用意する。
+    for mno, sent_at in (("BU1", "2026-07-06T10:00:00"), ("BU2", "2026-07-07T10:00:00")):
+        repo.conn.execute(
+            "INSERT INTO sent_log (member_no, kind, channel, sent_at, created_at,"
+            " backfilled) VALUES (?, 'first', '', ?, ?, 1)", (mno, sent_at, sent_at))
+    repo.conn.commit()
+
+    monkeypatch.setattr(sync_mod, "load_channel_backfill", lambda: [
+        ("BU1", "first", "pickup"), ("BU2", "first", "platinum")])
+    sheets = FakeSheets()
+    report = sync_analytics(repo, sheets, now=datetime(2026, 7, 16, 12, 0),
+                            with_charts=False, trend_fn=None)
+    repo.close()
+
+    assert report.channels_filled == 2
+    header, *rows = sheets.data[WEEKLY_SHEET]
+    i_normal = header.index("通常スカウト送信")
+    i_pickup = header.index("ピックアップ送信")
+    i_unknown = header.index("内訳不明送信")
+    week = next(r for r in rows if r and str(r[0]).startswith("2026-W28"))
+    assert (week[i_normal], week[i_pickup], week[i_unknown]) == (1, 1, 0)
