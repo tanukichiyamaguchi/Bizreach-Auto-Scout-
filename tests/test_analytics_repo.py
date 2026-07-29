@@ -232,3 +232,59 @@ def test_meta_roundtrip(tmp_path):
     repo.set_meta("last_trend_at", "2026-07-17T00:00:00")  # 上書き
     assert repo.get_meta("last_trend_at") == "2026-07-17T00:00:00"
     repo.close()
+
+
+# --- 送信枠（channel）の復元 -------------------------------------------------
+
+def _sent_log_row(repo, mno, kind="first", sent_at="2026-07-05T10:00:00", channel=""):
+    repo.conn.execute(
+        "INSERT INTO sent_log (member_no, kind, channel, sent_at, created_at, backfilled)"
+        " VALUES (?, ?, ?, ?, ?, 1)", (mno, kind, channel, sent_at, sent_at))
+    repo.conn.commit()
+
+
+def test_backfill_channels_fills_only_empty_rows(tmp_path):
+    """送信枠が空の過去行だけを埋め、記録済みの実測値は絶対に上書きしない。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    _sent_log_row(repo, "BU1111111", "first", channel="")          # 内訳不明
+    _sent_log_row(repo, "BU2222222", "first", channel="pickup")    # 記録済み
+    _sent_log_row(repo, "BU1111111", "resend", channel="")         # 内訳不明（再送）
+
+    filled = repo.backfill_channels([
+        ("BU1111111", "first", "pickup"),
+        ("BU2222222", "first", "platinum"),   # 記録済みなので無視される
+        ("BU1111111", "resend", "platinum"),
+        ("BU9999999", "first", "platinum"),   # sent_log に無い会員
+    ])
+    assert filled == 2
+    got = {(r["member_no"], r["kind"]): r["channel"] for r in
+           repo.conn.execute("SELECT member_no, kind, channel FROM sent_log")}
+    assert got == {("BU1111111", "first"): "pickup",
+                   ("BU2222222", "first"): "pickup",     # 上書きされていない
+                   ("BU1111111", "resend"): "platinum"}
+    # 再実行しても何も変わらない（冪等）。
+    assert repo.backfill_channels([("BU1111111", "first", "platinum")]) == 0
+    assert repo.conn.execute(
+        "SELECT channel FROM sent_log WHERE member_no='BU1111111' AND kind='first'"
+    ).fetchone()["channel"] == "pickup"
+    repo.close()
+
+
+def test_backfill_channels_matches_zero_padded_member_no(tmp_path):
+    """対応表がゼロ埋め表記でも、DBの正準形と突き合わせて埋まる。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    _sent_log_row(repo, "BU2488413", "first", channel="")
+    assert repo.backfill_channels([("BU02488413", "first", "pickup")]) == 1
+    assert repo.conn.execute(
+        "SELECT channel FROM sent_log").fetchone()["channel"] == "pickup"
+    repo.close()
+
+
+def test_backfill_channels_ignores_invalid_rows(tmp_path):
+    repo = Repository(db_path=tmp_path / "t.db")
+    _sent_log_row(repo, "BU1111111", "first", channel="")
+    assert repo.backfill_channels([
+        ("BU1111111", "unknown_kind", "pickup"),
+        ("BU1111111", "first", ""),
+    ]) == 0
+    repo.close()
