@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from .config import (
     BizreachCredentials,
     consultants_path,
     get_settings,
+    normalize_model,
     project_root,
 )
 from .logging_config import logger
@@ -47,8 +49,12 @@ def _check_model() -> Check:
     s = get_settings()
     budget = s.thinking_budget_tokens
     think = f"拡張思考ON({budget}tok)" if budget and budget > 0 else "拡張思考OFF"
+    # 旧 Opus が指定されていた場合は読み替えたことを明示する（黙って変えない）。
+    requested = os.environ.get("BIZSCOUT_MODEL", "").strip()
+    note = (f" ※指定の {requested} は {s.model} に読み替え"
+            if requested and normalize_model(requested) != requested else "")
     return Check("生成モデル", "ok",
-                 f"使用モデル: {s.model} / {think} / max_tokens={s.max_tokens}")
+                 f"使用モデル: {s.model} / {think} / max_tokens={s.max_tokens}{note}")
 
 
 def _check_bizreach_credentials() -> Check:

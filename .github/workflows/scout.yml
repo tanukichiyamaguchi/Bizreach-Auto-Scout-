@@ -58,7 +58,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       BIZREACH_EMAIL: ${{ secrets.BIZREACH_EMAIL }}
       BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
-      BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-4-8' }}
+      BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-5' }}
       BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '20' }}
       BIZSCOUT_GSHEET_SPREADSHEET_ID: ${{ vars.BIZSCOUT_GSHEET_SPREADSHEET_ID }}
     steps:
