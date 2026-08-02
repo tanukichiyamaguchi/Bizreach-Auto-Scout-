@@ -288,3 +288,74 @@ def test_backfill_channels_ignores_invalid_rows(tmp_path):
         ("BU1111111", "first", ""),
     ]) == 0
     repo.close()
+
+
+# --- 消失した送信記録の復元 ---------------------------------------------------
+
+def test_restore_lost_sends_creates_dedupe_and_sent_log(tmp_path):
+    """復元は sent_log（分析の分母）と scouts（重複送信防止）の両方に効く。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    n = repo.restore_lost_sends([
+        ("BU1111111", "first", "pickup", "2026-07-21T18:35:11"),
+        ("BU2222222", "first", "platinum", "2026-07-26T18:21:00"),
+    ])
+    assert n == 2
+    # 重複送信防止: first_sent が True になり、パイプラインは重複スキップする。
+    assert repo.first_sent("BU1111111") is True
+    assert repo.first_sent("BU2222222") is True
+    row = repo.conn.execute(
+        "SELECT channel, sent_at, backfilled FROM sent_log WHERE member_no='BU1111111'"
+    ).fetchone()
+    assert (row["channel"], row["sent_at"], row["backfilled"]) == (
+        "pickup", "2026-07-21T18:35:11", 1)
+    # 再実行しても増えない（冪等）。
+    assert repo.restore_lost_sends([
+        ("BU1111111", "first", "pickup", "2026-07-21T18:35:11")]) == 0
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"] == 2
+    repo.close()
+
+
+def test_restore_lost_sends_never_overwrites_existing(tmp_path):
+    """実測の送信記録がある会員は一切上書きしない。"""
+    repo = _repo_with_sent(tmp_path, mno="BU3765516", channel="platinum")
+    n = repo.restore_lost_sends([
+        ("BU3765516", "first", "pickup", "2026-07-01T00:00:00")])
+    assert n == 0
+    row = repo.conn.execute(
+        "SELECT channel, backfilled FROM sent_log WHERE member_no='BU3765516'"
+    ).fetchone()
+    assert row["channel"] == "platinum" and row["backfilled"] == 0
+    scout = repo.get_scout("BU3765516", "first")
+    assert scout["subject"] != ""  # 文面も保持
+    repo.close()
+
+
+def test_restore_lost_sends_promotes_generated_scout(tmp_path):
+    """生成済み(未送信扱い)の行がある場合は文面を保持したまま sent へ昇格する。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    cand = make_candidate(member_no="BU3765516")
+    repo.upsert_candidate(cand, check_eligibility(cand))
+    repo.record_generated(_scout("BU3765516"))
+    assert repo.first_sent("BU3765516") is False
+
+    n = repo.restore_lost_sends([
+        ("BU3765516", "first", "platinum", "2026-07-21T18:35:11")])
+    assert n == 1
+    assert repo.first_sent("BU3765516") is True
+    scout = repo.get_scout("BU3765516", "first")
+    assert scout["subject"] == "【Premium Offer】初回"  # 文面は保持
+    assert scout["sent_at"] == "2026-07-21T18:35:11"
+    # プロフィールが candidates にあるので sent_log にも非正規化される。
+    row = repo.conn.execute(
+        "SELECT age_band FROM sent_log WHERE member_no='BU3765516'").fetchone()
+    assert row["age_band"] == "30〜34"
+    repo.close()
+
+
+def test_restore_lost_sends_normalizes_member_no(tmp_path):
+    repo = Repository(db_path=tmp_path / "t.db")
+    assert repo.restore_lost_sends([
+        ("BU02488413", "first", "pickup", "2026-07-21T18:35:11")]) == 1
+    assert repo.first_sent("BU2488413") is True
+    repo.close()

@@ -61,3 +61,48 @@ def test_shipped_table_is_readable_and_consistent():
     keys = [(m, k) for m, k, _ in entries]
     assert len(keys) == len(set(keys)), "同じ (会員番号, kind) が重複している"
     assert all(c in ("platinum", "pickup") for _, _, c in entries)
+
+
+# --- 消失送信の復元表（sent_backfill.json）----------------------------------
+
+def test_load_sent_backfill_valid_and_invalid(tmp_path):
+    from bizreach_scout.analytics.channel_backfill import load_sent_backfill
+
+    path = tmp_path / "sent_backfill.json"
+    path.write_text(json.dumps({"entries": [
+        ["BU1111111", "first", "pickup", "2026-07-21T18:35:11", "run1"],
+        ["BU2222222", "first", "platinum", "2026-07-26T18:21:00"],   # run_id無しも可
+        ["BU3333333", "unknown", "platinum", "2026-07-26T18:21:00"],  # kind不正
+        ["BU4444444", "first", "mystery", "2026-07-26T18:21:00"],     # channel不正
+        ["BU5555555", "first", "pickup", "いつか"],                    # 日時不正
+        ["BU6666666", "first"],                                       # 要素不足
+    ]}, ensure_ascii=False), encoding="utf-8")
+    assert load_sent_backfill(path) == [
+        ("BU1111111", "first", "pickup", "2026-07-21T18:35:11"),
+        ("BU2222222", "first", "platinum", "2026-07-26T18:21:00"),
+    ]
+
+
+def test_load_sent_backfill_missing_or_broken(tmp_path):
+    from bizreach_scout.analytics.channel_backfill import load_sent_backfill
+
+    assert load_sent_backfill(tmp_path / "nope.json") == []
+    p = tmp_path / "sent_backfill.json"
+    p.write_text("{broken", encoding="utf-8")
+    assert load_sent_backfill(p) == []
+
+
+def test_shipped_sent_backfill_is_consistent():
+    """出荷中の復元表: 56件・(会員番号,種別)一意・妥当な値のみ。"""
+    from bizreach_scout.analytics.channel_backfill import (
+        load_sent_backfill,
+        sent_backfill_path,
+    )
+
+    assert sent_backfill_path().exists()
+    entries = load_sent_backfill()
+    assert len(entries) == 56
+    keys = [(m, k) for m, k, _, _ in entries]
+    assert len(keys) == len(set(keys))
+    assert all(c in ("platinum", "pickup") for _, _, c, _ in entries)
+    assert all(s.startswith("2026-07-") for _, _, _, s in entries)

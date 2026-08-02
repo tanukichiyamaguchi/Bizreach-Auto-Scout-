@@ -400,6 +400,47 @@ class Repository:
         after = self.conn.execute("SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"]
         return after - before
 
+    def restore_lost_sends(self, entries: Iterable[tuple[str, str, str, str]]) -> int:
+        """実行ログから復元した「消えた送信記録」をDBへ戻す（冪等）。
+
+        2026-07 に送信完了後のタイムアウト等で actions/cache の保存が走らず、
+        送信記録が巻き戻った実績への対処。各エントリ (member_no, kind, channel, sent_at) を
+        (1) sent_log（分析の分母）と (2) scouts（重複送信防止の唯一の基準 first_sent）の
+        両方へ反映する。既存の記録は一切上書きしない。件名・本文は失われているため
+        空のまま（この復元分の返信は件名一致では検知できない）。
+        新たに sent_log へ追加できた件数を返す。
+        """
+        from ..models import normalize_member_no
+
+        restored = 0
+        started = self.conn.total_changes
+        now = _now_iso()
+        for member_no, kind, channel, sent_at in entries:
+            mno = normalize_member_no(member_no)
+            # scouts: 行が無ければ最小の sent 行を作る。未送信状態(generated等)の行が
+            # あれば sent へ昇格（文面は保持）。既に sent なら触らない。
+            row = self.conn.execute(
+                "SELECT status FROM scouts WHERE member_no=? AND kind=?",
+                (mno, kind)).fetchone()
+            if row is None:
+                self.conn.execute(
+                    "INSERT INTO scouts (member_no, kind, subject, body, status,"
+                    " sent_at, analysis, created_at) VALUES (?, ?, '', '', 'sent', ?, ?, ?)",
+                    (mno, kind, sent_at,
+                     "実行ログから復元（キャッシュ未保存で消失した送信）", now))
+            elif row["status"] != "sent":
+                self.conn.execute(
+                    "UPDATE scouts SET status='sent', sent_at=COALESCE(sent_at, ?)"
+                    " WHERE member_no=? AND kind=?", (sent_at, mno, kind))
+            # sent_log: INSERT OR IGNORE（UNIQUE(member_no,kind)）。
+            before = self.conn.total_changes
+            self._log_sent_event(mno, kind, channel, sent_at, backfilled=1)
+            if self.conn.total_changes > before:
+                restored += 1
+        if self.conn.total_changes > started:  # scouts昇格のみの場合も確実に永続化
+            self.conn.commit()
+        return restored
+
     def backfill_channels(self, entries: Iterable[tuple[str, str, str]]) -> int:
         """送信枠が空の過去ログへ、実行ログから復元した送信枠を埋める（冪等）。
 

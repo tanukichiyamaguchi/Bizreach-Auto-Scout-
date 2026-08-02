@@ -21,7 +21,7 @@ from .aggregate import (
     standard_segments,
     weekly_summary,
 )
-from .channel_backfill import load_channel_backfill
+from .channel_backfill import load_channel_backfill, load_sent_backfill
 from .sheets import SheetsPort
 
 SENT_LOG_SHEET = "送信ログ"
@@ -55,6 +55,7 @@ _GENDER_LABELS = {"male": "男性", "female": "女性", "unknown": "不明", "":
 @dataclass
 class SyncReport:
     backfilled: int = 0
+    lost_restored: int = 0
     channels_filled: int = 0
     manual_merged: int = 0
     members: int = 0
@@ -65,7 +66,8 @@ class SyncReport:
 
     def summary(self) -> str:
         return (f"分析同期: 対象{self.members}名 / 返信{self.replied}名 / "
-                f"backfill+{self.backfilled} / 送信枠復元+{self.channels_filled} / "
+                f"backfill+{self.backfilled} / 消失復元+{self.lost_restored} / "
+                f"送信枠復元+{self.channels_filled} / "
                 f"手動マージ{self.manual_merged}件 / "
                 f"チャート{self.charts}件 / 傾向分析更新={self.trend_refreshed}")
 
@@ -314,8 +316,11 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
 
     # 1. sent_log を自己修復（キャッシュ消失・過去分の補完。冪等）。
     report.backfilled = repo.backfill_sent_log()
-    # 1'. 送信枠を記録する前の過去分に、実行ログから復元した送信枠を埋める（冪等）。
-    #     backfill_sent_log の直後に行う（復元された行も対象にするため）。
+    # 1'. キャッシュ未保存で消えた送信記録を実行ログ由来の復元表から戻す（冪等）。
+    #     scouts(重複送信防止) と sent_log(分析の分母) の両方に効く。
+    report.lost_restored = repo.restore_lost_sends(load_sent_backfill())
+    # 1''. 送信枠を記録する前の過去分に、実行ログから復元した送信枠を埋める（冪等）。
+    #      backfill 群の後に行う（復元された行も対象にするため）。
     report.channels_filled = repo.backfill_channels(load_channel_backfill())
 
     # 2. シートの手動チェックを読み戻して DB へマージ（書き換え前に必ず行う）。

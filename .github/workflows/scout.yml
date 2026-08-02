@@ -51,7 +51,11 @@ permissions:
 jobs:
   scout:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 注意: 送信が多い日は「送信間隔(20-60秒)×件数＋受信箱スキャン(約7分)」で30分を
+    # 超えることがある。30分設定だった2026-07に3回タイムアウトでキャンセルされ、
+    # 送信後のキャッシュ保存が走らず計44件の送信記録が消失した（送信自体は完了済み）。
+    # 実測最長28分に対し十分な余裕を取る。
+    timeout-minutes: 50
     env:
       # 全タイムスタンプ（送信記録・週次集計）をJSTで統一する。
       TZ: "Asia/Tokyo"
@@ -81,8 +85,12 @@ jobs:
       # --- 実行間で状態(DB・ログイン セッション)を保持 ---
       # 注意: actions/cache は最善努力。長期間未実行や容量超過で消えると
       #       重複判定/再送スケジュールがリセットされる（重複送信リスク）。
+      # restore のみ行い、保存は明示ステップで送信直後＋実行末尾に行う（下記参照）。
+      # 旧来の actions/cache（実行末尾のpostステップでのみ保存）では、送信後に
+      # タイムアウト等でキャンセルされると保存されず、送信記録が丸ごと巻き戻る
+      # （2026-07に4回発生・計56件消失）。restore-keys の前方一致は「最新の保存」を選ぶ。
       - name: Restore state (data/)
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: data
           key: bizscout-data-${{ github.run_id }}
@@ -163,6 +171,15 @@ jobs:
           echo "本日のピックアップ（求人＋候補者）へ送信します（DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$PICKUP_MAX）。"
           bizscout run-pickup --kind both --max "$PICKUP_MAX"
 
+      # 【重要】送信直後に状態を保存する。後段（検索スカウト・返信検知・分析）で
+      # タイムアウトやキャンセルが起きても、ここまでの送信記録は失われない。
+      - name: Save state after pickup (data/)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: bizscout-data-${{ github.run_id }}-pickup
+
       # ピックアップは continue-on-error のため job 全体は緑のまま進むが、
       # 認証切れ等の全滅（exit 非0）は job summary に明示して見落としを防ぐ。
       - name: Flag pickup failure
@@ -182,6 +199,14 @@ jobs:
           else
             bizscout serve --once --max "$RUN_MAX"
           fi
+
+      # 【重要】検索スカウト＋再送の直後にも状態を保存（送信記録の消失防止）。
+      - name: Save state after scout (data/)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: bizscout-data-${{ github.run_id }}-scout
 
       # 送信フロー偵察モード（実送信なし）。送信API/セレクタ特定用の情報を artifact に残す。
       - name: Probe send flow (実送信なし)
@@ -277,6 +302,15 @@ jobs:
       - name: Status report
         if: always()
         run: bizscout report || true
+
+      # 実行末尾の保存（返信チェック時刻・分析メタ等を含む最終状態）。
+      # restore-keys は最新の保存を選ぶため、このキーが最優先で復元される。
+      - name: Save state (data/)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: bizscout-data-${{ github.run_id }}
 
       - name: Upload logs
         if: always()

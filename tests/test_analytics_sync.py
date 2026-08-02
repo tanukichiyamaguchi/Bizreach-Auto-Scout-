@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from bizreach_scout.analytics.sync import (
     MONTHLY_SHEET,
     SEGMENT_SHEET,
@@ -18,6 +20,18 @@ from bizreach_scout.models import GeneratedScout, ScoutContent
 from bizreach_scout.storage.repository import Repository
 
 from .factories import make_candidate
+
+
+@pytest.fixture(autouse=True)
+def _no_shipped_backfills(monkeypatch):
+    """出荷中の復元表（実データ56件等）がテストDBに混入しないよう既定は空にする。
+
+    復元の挙動を検証するテストは、この後から個別に monkeypatch で上書きする。
+    """
+    from bizreach_scout.analytics import sync as sync_mod
+
+    monkeypatch.setattr(sync_mod, "load_sent_backfill", lambda: [])
+    monkeypatch.setattr(sync_mod, "load_channel_backfill", lambda: [])
 
 
 class FakeSheets:
@@ -234,3 +248,28 @@ def test_sync_fills_missing_channels_from_backfill_table(tmp_path, monkeypatch):
     i_unknown = header.index("内訳不明送信")
     week = next(r for r in rows if r and str(r[0]).startswith("2026-W28"))
     assert (week[i_normal], week[i_pickup], week[i_unknown]) == (1, 1, 0)
+
+
+def test_sync_restores_lost_sends_into_weekly(tmp_path, monkeypatch):
+    """消失した送信が復元され、週次の分母と内訳に反映される。"""
+    from bizreach_scout.analytics import sync as sync_mod
+
+    repo = Repository(db_path=tmp_path / "t.db")
+    monkeypatch.setattr(sync_mod, "load_sent_backfill", lambda: [
+        ("BU7777777", "first", "pickup", "2026-07-06T18:00:00"),
+        ("BU8888888", "first", "platinum", "2026-07-07T18:00:00"),
+    ])
+    monkeypatch.setattr(sync_mod, "load_channel_backfill", lambda: [])
+    sheets = FakeSheets()
+    report = sync_analytics(repo, sheets, now=datetime(2026, 7, 16, 12, 0),
+                            with_charts=False, trend_fn=None)
+    repo.close()
+
+    assert report.lost_restored == 2
+    assert report.members == 2
+    header, *rows = sheets.data[WEEKLY_SHEET]
+    week = next(r for r in rows if r and str(r[0]).startswith("2026-W28"))
+    i_sent = header.index("送信数")
+    i_normal = header.index("通常スカウト送信")
+    i_pickup = header.index("ピックアップ送信")
+    assert (week[i_sent], week[i_normal], week[i_pickup]) == (2, 1, 1)
