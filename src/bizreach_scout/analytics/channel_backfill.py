@@ -17,6 +17,7 @@ config/channel_backfill.json に固定した対応表として持つ。
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from ..config import project_root
@@ -29,6 +30,40 @@ VALID_CHANNELS = ("platinum", "normal", "pickup")
 
 def channel_backfill_path() -> Path:
     return project_root() / "config" / "channel_backfill.json"
+
+
+def sent_backfill_path() -> Path:
+    return project_root() / "config" / "sent_backfill.json"
+
+
+def load_sent_backfill(path: Path | None = None) -> list[tuple[str, str, str, str]]:
+    """「送信されたのにDBから消えた送信記録」の復元表を読む。
+
+    各エントリは (member_no, kind, channel, sent_at)。2026-07 に送信完了後の
+    タイムアウト/失敗で actions/cache の保存が走らず、送信記録が巻き戻った56件
+    （実行ログから復元）。ファイルが無い・壊れている場合は空リストを返す。
+    """
+    path = path or sent_backfill_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("消失送信の復元表を読めませんでした（続行）: %s", e)
+        return []
+    out: list[tuple[str, str, str, str]] = []
+    for row in data.get("entries", []):
+        if not isinstance(row, list | tuple) or len(row) < 4:
+            continue
+        member_no, kind, channel, sent_at = (str(x) for x in row[:4])
+        if kind not in ("first", "resend") or channel not in VALID_CHANNELS:
+            continue
+        try:
+            datetime.fromisoformat(sent_at)
+        except ValueError:
+            continue
+        out.append((member_no, kind, channel, sent_at))
+    return out
 
 
 def load_channel_backfill(path: Path | None = None) -> list[tuple[str, str, str]]:
