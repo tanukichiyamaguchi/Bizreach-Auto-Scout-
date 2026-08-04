@@ -332,3 +332,33 @@ def test_signer_excluded_by_name_even_if_id_changed():
     intro = select_intro_matches(cand, match_consultants(cand, consultants=pool, rules=rules),
                                  rules=rules, consultants=pool)
     assert [m.consultant.id for m in intro] == ["c002"]
+
+
+def test_yamamoto_is_excluded_with_production_rules():
+    """本番設定＋実データで、山本がどの経路（共通点/フォールバック）でも紹介されない。
+
+    2026-08-02 の運用指示「山本については今後スカウトの内容には掲載しない」の回帰テスト。
+    設定は実際の config/scout_rules.yaml、コンサルタントは実データ（無ければサンプル）を使う。
+    """
+    from bizreach_scout.config import load_consultants, scout_rules
+
+    pool = load_consultants()
+    if not any("山本" in c.display_name for c in pool):
+        return  # サンプルデータ環境では対象外
+    rules = scout_rules()
+    assert "yamamoto" in rules["matching"]["exclude_consultant_ids"]
+    assert "山本" in rules["matching"]["exclude_consultant_names"]
+
+    # 山本本人と共通点だらけの候補者を作っても、紹介には選ばれない。
+    yama = next(c for c in pool if "山本" in c.display_name)
+    cand = make_candidate(
+        current_company=(yama.former_companies[0] if yama.former_companies else "無関係"),
+        prior_companies=list(yama.former_companies),
+        university=(yama.universities[0] if yama.universities else ""),
+        job_function=(yama.roles[0] if yama.roles else ""),
+    )
+    matches = match_consultants(cand, consultants=pool, rules=rules)
+    intro = select_intro_matches(cand, matches, rules=rules, consultants=pool)
+    assert all("山本" not in m.consultant.display_name for m in matches)
+    assert all("山本" not in m.consultant.display_name for m in intro)
+    assert len(intro) >= 1  # 除外しても紹介人数は確保される

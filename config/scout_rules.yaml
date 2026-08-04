@@ -123,13 +123,14 @@ matching:
                        第一生命, 日本生命, 明治安田, 外資系保険]
   # 共通点を判定する候補者属性のフィールド
   match_fields: [prior_companies, current_company, industry, job_function, university]
-  # 紹介対象から除外するコンサルタントID。署名者（代表取締役社長・岩渕龍正）は
-  # メールの差出人本人であり、「当社にはこういうコンサルタントがいます」と第三者として
-  # 紹介するのは不自然なため除外する。
-  exclude_consultant_ids: [iwabuchi]
+  # 紹介対象から除外するコンサルタントID。
+  # - iwabuchi: 署名者（代表取締役社長・岩渕龍正）はメールの差出人本人であり、
+  #   第三者として紹介するのは不自然なため除外。
+  # - yamamoto: 山本はスカウト文面に掲載しない（2026-08-02 の運用指示）。
+  exclude_consultant_ids: [iwabuchi, yamamoto]
   # ID の保険。import-consultants は consultants.json を再生成して id を振り直すため、
-  # 氏名（部分一致）でも署名者を除外できるようにする。
-  exclude_consultant_names: [岩渕]
+  # 氏名（部分一致）でも除外できるようにする。
+  exclude_consultant_names: [岩渕, 山本]
   # 「職種・役割の共通点」の根拠にしない語。consultants.json の roles には役職名が
   # 混ざっており、候補者の役職（現職の positionName）と一致して『職種の共通点』に
   # なってしまうため除外する（役職が同じでも職種が同じとは限らない）。
