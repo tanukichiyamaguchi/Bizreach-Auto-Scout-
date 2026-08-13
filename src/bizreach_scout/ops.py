@@ -164,6 +164,26 @@ def _check_dry_run() -> Check:
     )
 
 
+def _check_safety_limits() -> Check:
+    """送信の安全弁（送信上限・状態DB消失ガード）の**実効値**を表示する。
+
+    「安全弁を実装した」と「安全弁が効いている」は別物で、実際に
+    BIZSCOUT_EXPECT_STATE が実行基盤の環境変数に渡っておらず、ドキュメントには
+    手順があるのに本番では常に無効、という状態が起きていた。実効値を毎回ログへ
+    出すことで配線の有無をログだけで検証できるようにする。
+    """
+    s = get_settings()
+    guard = "有効" if s.expect_state else "無効"
+    status = "ok" if s.expect_state else "warn"
+    detail = (f"1実行あたり送信上限={s.max_sends_per_run} / "
+              f"送信間隔={s.send_delay_min:.0f}〜{s.send_delay_max:.0f}秒 / "
+              f"状態DB消失ガード={guard}")
+    if not s.expect_state:
+        detail += ("（BIZSCOUT_EXPECT_STATE が未設定です。一度でも本番送信をしたら "
+                   "true にしてください。状態DBが消えたときの全員再送信を防げません）")
+    return Check("送信の安全弁", status, detail)
+
+
 def _check_playwright() -> Check:
     """playwright が import 可能かを点検する。"""
     try:
@@ -273,6 +293,7 @@ _CHECK_FUNCS = (
     _check_db_writable,
     _check_kill_switch,
     _check_dry_run,
+    _check_safety_limits,
     _check_playwright,
     _check_chromium,
     _check_storage_state_dir,

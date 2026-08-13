@@ -70,7 +70,7 @@ base64 -w0 data/sessions/bizreach_state.json   # 出力された文字列をコ�
 | `BIZSCOUT_MAX_SENDS_PER_RUN` | `20` | 1回の送信上限（検索スカウト・再送用。ピックアップには適用されない） |
 | `BIZSCOUT_MODEL` | `claude-opus-5` | 生成モデル（任意）。**Opus は Opus 5 を使う方針**のため、旧 Opus のモデル名が残っていても `claude-opus-5` に読み替えて実行します（`bizscout doctor` の「生成モデル」行に読み替えを表示） |
 | `BIZSCOUT_GSHEET_SPREADSHEET_ID` | `1AbC...` | スカウト分析の出力先スプレッドシートID（**任意**・`docs/スカウト分析.md` 参照） |
-| `BIZSCOUT_EXPECT_STATE` | `true` | **状態DB消失ガード（推奨）。** 送信履歴DBが空のまま実送信しようとしたら中断する（下記「状態DBが消えたときの復旧」参照）。**初回運用のときだけ `false`（またはVariable未設定）**にし、一度でも送信されたら `true` にする |
+| `BIZSCOUT_EXPECT_STATE` | `true` | **状態DB消失ガード。既定で有効**（Variable 未設定でも `true` として動きます）。送信履歴DBが空のまま実送信しようとしたら中断する（下記「状態DBが消えたときの復旧」参照）。**本当の初回運用のときだけ `false` を明示設定**する |
 
 ---
 
@@ -129,10 +129,16 @@ base64 -w0 data/sessions/bizreach_state.json   # 出力された文字列をコ�
 
 これを防ぐ仕組みと、消えた場合の復旧手順は次のとおりです。
 
-### 自動ガード（`BIZSCOUT_EXPECT_STATE=true`）
-Variables に `BIZSCOUT_EXPECT_STATE=true` を設定しておくと、**送信履歴DBが空のまま実送信しようとした瞬間に実行を中断**します（`RuntimeError` で job が赤くなる）。
+### 自動ガード（`BIZSCOUT_EXPECT_STATE`・既定で有効）
+**送信履歴DBが空のまま実送信しようとした瞬間に実行を中断**します（`RuntimeError` で job が赤くなる）。
 これにより「キャッシュ消失 → 気づかず全員へ再送信」という事故を未然に止めます。
-`dry_run=true` の実行はそもそも送信しないためガード対象外です。**一度でも本番送信を行った後は必ず `true` にしておいてください**（初回運用時のみ `false`）。
+`dry_run=true` の実行はそもそも送信しないためガード対象外です。
+
+ワークフローの env で既定 `true` を渡しているため、Variable を設定しなくても有効です
+（本当の初回運用のときだけ Variables に `false` を明示設定してください）。
+実際に効いているかは毎回の実行ログの起動前チェック「送信の安全弁」行で確認できます
+（`状態DB消失ガード=有効` と出ます）。以前はこの Variable がワークフローに渡っておらず、
+手順書どおりに設定しても**CIでは常に無効**でした（2026-08-13 修正）。
 
 ### DBスナップショットからの復旧
 本ワークフローは毎回の実行で `data/bizscout.db` を `Upload logs` の成果物（artifact, 14日保持）に含めています。
