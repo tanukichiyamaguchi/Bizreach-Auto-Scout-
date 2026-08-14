@@ -64,6 +64,11 @@ jobs:
       BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
       BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-5' }}
       BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '20' }}
+      # 状態DB消失ガード。送信履歴が空のまま実送信しようとしたら中断する
+      # （actions/cache 失効で重複防止データが消え、全候補者へ再送信する事故を防ぐ）。
+      # 既定を true にしているのは、本番が既に多数の送信実績を持つため。
+      # 本当の初回運用のときだけ Variables に false を設定する。
+      BIZSCOUT_EXPECT_STATE: ${{ vars.BIZSCOUT_EXPECT_STATE || 'true' }}
       BIZSCOUT_GSHEET_SPREADSHEET_ID: ${{ vars.BIZSCOUT_GSHEET_SPREADSHEET_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -150,8 +155,11 @@ jobs:
             echo "セッション secret 未設定。cache のセッション、または email/password ログインに依存します。"
           fi
 
+      # 起動前チェックは送信のゲートにする。fail（APIキー未設定・設定のタイポ・
+      # 認証情報欠落・DB書き込み不可・playwright未導入など）が1件でもあれば
+      # 後続の送信ステップを実行しない。warn は許容される。
+      # 以前は continue-on-error: true で「点検が失敗しても送信が続く」状態だった。
       - name: Preflight (doctor)
-        continue-on-error: true
         run: bizscout doctor
 
       # 本日のピックアップ（無料枠・本命）。求人ベース＋候補者ベースの両セクションを処理。

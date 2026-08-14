@@ -105,3 +105,40 @@ def test_dry_run_false_ok(monkeypatch):
     check = ops._check_dry_run()
     assert check.status == "ok"
     assert "本番送信" in check.detail
+
+
+# --- 安全弁の実効値の可視化 ---------------------------------------------------
+
+def test_safety_limits_check_shows_effective_values(monkeypatch):
+    """送信上限・送信間隔・状態DBガードの実効値がレポートに出る。"""
+    from bizreach_scout.config import get_settings
+    from bizreach_scout.ops import _check_safety_limits
+
+    monkeypatch.setenv("BIZSCOUT_MAX_SENDS_PER_RUN", "7")
+    monkeypatch.setenv("BIZSCOUT_EXPECT_STATE", "true")
+    get_settings.cache_clear()
+    c = _check_safety_limits()
+    assert c.status == "ok"
+    assert "送信上限=7" in c.detail
+    assert "状態DB消失ガード=有効" in c.detail
+    get_settings.cache_clear()
+
+
+def test_safety_limits_check_warns_when_state_guard_is_off(monkeypatch):
+    """ガードが無効なら warn にして、配線漏れに気づけるようにする。"""
+    from bizreach_scout.config import get_settings
+    from bizreach_scout.ops import _check_safety_limits
+
+    monkeypatch.setenv("BIZSCOUT_EXPECT_STATE", "false")
+    get_settings.cache_clear()
+    c = _check_safety_limits()
+    assert c.status == "warn"
+    assert "状態DB消失ガード=無効" in c.detail
+    assert "BIZSCOUT_EXPECT_STATE" in c.detail
+    get_settings.cache_clear()
+
+
+def test_safety_limits_is_part_of_doctor():
+    from bizreach_scout.ops import _CHECK_FUNCS, _check_safety_limits
+
+    assert _check_safety_limits in _CHECK_FUNCS
