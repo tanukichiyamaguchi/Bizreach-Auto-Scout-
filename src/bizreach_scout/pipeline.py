@@ -156,18 +156,47 @@ class ScoutPipeline:
         """1つの検索ソースを処理する。
 
         sent_offset は同一サイクルで既に送信済みの件数。複数検索URLをまたいでも
-        1実行あたりの送信上限(max_sends_per_run)を守るために使う。
+        1実行あたりの送信上限(max_sends_per_run)を守るために使う。この上限は
+        保存検索ごとではなく**1実行の合計**であり、上限に達した時点で以降の
+        候補者の取り込み・文面生成もやめる（source は遅延評価なので、ここで
+        break するとレジュメ取得もLLM呼び出しも走らない）。
+
+        途中で打ち切るのは費用だけの理由ではない。生成だけして送らなかった候補者は
+        「評価済み」として次回の取り込みから外れるため、上限超過分まで評価を
+        進めてしまうと、その候補者が送信されないまま埋もれる。
         """
         report = PipelineReport()
         self._guard_state_present(send)
         on_ineligible = self.rules.get("eligibility", {}).get("on_ineligible", "skip")
 
-        for candidate in source:
+        # for 文だと「次の候補者を取り出してから上限を確認する」順になり、
+        # 送れないと分かっている1名分のレジュメを余計に取得してしまう。
+        # 取り出す前に確認するため、明示的にイテレータを回す。
+        it = iter(source)
+        while True:
+            if self._send_budget_exhausted(send, report, sent_offset):
+                logger.info(
+                    "1実行あたりの送信上限(%d・全保存検索の合計)に達したため、"
+                    "以降の取り込みを打ち切ります。", self.max_sends,
+                )
+                break
+            try:
+                candidate = next(it)
+            except StopIteration:
+                break
             report.processed += 1
             self._process_one(candidate, send, on_ineligible, report, sent_offset)
 
         logger.info("\n%s", report.summary())
         return report
+
+    def _send_budget_exhausted(
+        self, send: bool, report: PipelineReport, sent_offset: int
+    ) -> bool:
+        """この実行で送れる残数が尽きたか。生成のみ実行(send=False)では常に False。"""
+        if not (send and self.sender is not None):
+            return False
+        return (sent_offset + report.sent + report.dry_run) >= self.max_sends
 
     def _process_one(
         self,

@@ -41,6 +41,8 @@ class FakePipeline:
 
     instances: ClassVar[list[FakePipeline]] = []
 
+    max_sends = 10  # 1実行の合計送信上限（全保存検索の合計）
+
     def __init__(self, repo=None, generator=None, sender=None):
         self.repo = repo
         self.generator = generator
@@ -72,7 +74,7 @@ class FakeRepository:
         self.reevaluate_calls: list[int] = []
         FakeRepository.instances.append(self)
 
-    def recently_evaluated_mrccids(self, within_days):
+    def settled_mrccids(self, within_days):
         self.reevaluate_calls.append(within_days)
         return {"BU_ALREADY"}
 
@@ -246,6 +248,34 @@ def test_run_cycle_shares_ingest_cursor_across_search_urls(patched):
     assert sources[0].skip_mrccids is sources[1].skip_mrccids
     # ページ送りの上限も渡る。
     assert sources[0].max_pages == service.get_settings().ingest_max_pages
+
+
+def test_run_cycle_stops_opening_searches_once_total_reached(patched):
+    """送信上限は保存検索ごとではなく1実行の合計。達したら残りの保存検索は開かない。"""
+    # 1保存検索あたり sent=2 を返すスタブなので、上限5なら3つ目に入る前に止まる。
+    FakePipeline.max_sends = 5
+    try:
+        result = service.run_cycle(
+            search_url="https://ex.com/s1 https://ex.com/s2 https://ex.com/s3 https://ex.com/s4"
+        )
+    finally:
+        FakePipeline.max_sends = 10
+
+    # 2+2+2=6 で上限5を超えた時点で打ち切るため、開いた保存検索は3つまで。
+    assert result["pipeline"]["sent"] == 6
+    assert result["pipeline"]["search_urls"] == 3        # 実際に処理した数
+    assert result["pipeline"]["search_urls_configured"] == 4  # 登録数
+    assert len(patched["source"]) == 3
+
+
+def test_run_cycle_processes_all_searches_when_under_total(patched):
+    """上限に達しなければ登録した保存検索は全て処理する。"""
+    result = service.run_cycle(
+        search_url="https://ex.com/s1 https://ex.com/s2 https://ex.com/s3"
+    )
+    assert result["pipeline"]["search_urls"] == 3
+    assert result["pipeline"]["search_urls_configured"] == 3
+    assert len(patched["source"]) == 3
 
 
 def test_run_cycle_closes_client_and_repo(patched):

@@ -60,7 +60,10 @@ class Settings(BaseSettings):
 
     # 送信制御
     dry_run: bool = True
-    max_sends_per_run: int = 20
+    # 1実行で送る初回スカウトの上限。**保存検索ごとではなく全保存検索の合計**
+    # （4つ登録していても合計でこの件数まで）。再送にも同じ上限が別枠で適用される。
+    # ピックアップは無料枠のためこの上限を受けない。
+    max_sends_per_run: int = 10
     send_delay_min: float = 20.0
     send_delay_max: float = 60.0
     kill_switch: str = "data/state/STOP"

@@ -400,25 +400,41 @@ class Repository:
         after = self.conn.execute("SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"]
         return after - before
 
-    def recently_evaluated_mrccids(self, within_days: int) -> set[str]:
-        """直近 within_days 日以内に評価済みの候補者の mrccid を返す。
+    def settled_mrccids(self, within_days: int) -> set[str]:
+        """取り込み時に読み飛ばしてよい候補者の mrccid を返す。
 
-        取り込みは保存検索の**先頭から** max_candidates 件を取るため、評価済みを
-        除外しないと毎回同じ上位N件を取り直し、検索結果の奥にいる新しい候補者へ
-        永久に到達しない（2026-08の本番で、17日離れた実行で同一候補者7名が同じ
-        理由で対象外スキップされ、送信0件が続いていた）。
+        取り込みは保存検索の**先頭から** max_candidates 件を取るため、判定の済んだ
+        候補者を除外しないと毎回同じ上位N件を取り直し、検索結果の奥にいる新しい
+        候補者へ永久に到達しない（2026-08の本番で、17日離れた実行で同一候補者7名が
+        同じ理由で対象外スキップされ、送信0件が続いていた）。
 
-        期限を切るのは、対象条件のうち会員ステータス・現職在籍年数が時間で変わり、
-        今日の対象外が将来の対象になり得るため。期限切れは再び取り込み対象に戻る。
-        within_days<=0 なら空集合（=従来どおり全件を毎回取り直す）。
+        「判定が済んだ」＝次の2つだけ。
+
+        - **送信済み**: 二度と送らないので恒久的に読み飛ばす。
+        - **直近 within_days 日以内に対象外と判定**: 期限を切るのは、会員ステータスや
+          現職在籍年数が時間で変わり、今日の対象外が将来の対象になり得るため。
+
+        **対象条件を満たすのにまだ送っていない候補者は読み飛ばさない。** 送信上限に
+        かかって持ち越された候補者をここに含めると、次回以降も取り込まれず永久に
+        送信されないまま埋もれる。
+
+        within_days<=0 でも送信済みは読み飛ばす（重複送信の防止は常に有効）。
         """
-        if within_days <= 0:
-            return set()
-        cutoff = (datetime.now() - timedelta(days=within_days)).isoformat(timespec="seconds")
         out: set[str] = set()
-        for r in self.conn.execute(
-            "SELECT profile_json FROM candidates WHERE updated_at >= ?", (cutoff,)
-        ):
+        params: list[str] = []
+        # 送信済みは恒久除外。対象外は期限付きで除外。
+        clauses = [
+            "EXISTS (SELECT 1 FROM scouts s"
+            " WHERE s.member_no = c.member_no AND s.kind='first' AND s.status='sent')"
+        ]
+        if within_days > 0:
+            cutoff = (datetime.now() - timedelta(days=within_days)).isoformat(
+                timespec="seconds"
+            )
+            clauses.append("(c.eligible = 0 AND c.updated_at >= ?)")
+            params.append(cutoff)
+        sql = f"SELECT c.profile_json FROM candidates c WHERE {' OR '.join(clauses)}"
+        for r in self.conn.execute(sql, params):
             with contextlib.suppress(Exception):
                 mid = (json.loads(r["profile_json"]) or {}).get("mrccid")
                 if mid:
