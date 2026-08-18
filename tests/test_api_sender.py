@@ -101,3 +101,39 @@ def test_kill_switch_blocks_and_does_not_send(monkeypatch):
     out = s.send_scout(_cand(), "s", "b")
     assert out.status == "blocked"
     assert api.calls == []
+
+
+def test_over_length_body_is_not_sent():
+    """媒体の文字数上限（3000）を超える本文はAPIを叩かず failed で返す。
+
+    2026-08-14 の本番では 3179 文字の本文を送信して 400 ValidationViolated となり、
+    その日の送信が0件になった。
+    """
+    api = FakeApi({"status": 201, "endpoint": "platinum"})
+    out = ApiScoutSender(api, job_id="J", dry_run=False).send_scout(
+        _cand(), "s", "あ" * 3001
+    )
+    assert out.status == "failed"
+    assert "文字数上限" in out.detail
+    assert api.calls == []
+
+
+def test_over_length_reminder_body_is_not_sent():
+    """追客(reminder)本文が上限超過でも初回送信リクエスト全体が400になるため止める。"""
+    api = FakeApi({"status": 201, "endpoint": "platinum"})
+    out = ApiScoutSender(api, job_id="J", dry_run=False).send_scout(
+        _cand(), "s", "本文", reminder={"daysAfter": "FiveDays", "subject": "s",
+                                        "body": "あ" * 3001},
+    )
+    assert out.status == "failed"
+    assert api.calls == []
+
+
+def test_body_at_limit_is_sent():
+    """ちょうど上限（3000文字）は許容する。"""
+    api = FakeApi({"status": 201, "endpoint": "platinum"})
+    out = ApiScoutSender(api, job_id="J", dry_run=False).send_scout(
+        _cand(), "s", "あ" * 3000
+    )
+    assert out.status == "sent"
+    assert len(api.calls) == 1

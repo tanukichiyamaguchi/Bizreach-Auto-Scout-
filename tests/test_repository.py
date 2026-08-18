@@ -121,3 +121,63 @@ def test_ineligible_recorded(tmp_path):
     assert len(rows) == 1
     assert "年齢" in rows[0]["eligibility_failed"]
     repo.close()
+
+
+def test_settled_mrccids_skips_ineligible_but_keeps_pending(tmp_path):
+    """対象外は読み飛ばし、対象条件を満たすのに未送信の候補者は読み飛ばさない。
+
+    未送信の対象者まで除外すると、送信上限で持ち越された候補者が次回以降も
+    取り込まれず、永久に送信されないまま埋もれる。
+    """
+    repo = Repository(db_path=tmp_path / "t.db")
+    ok = make_candidate(member_no="BU0000001", mrccid="MR001")       # 対象・未送信
+    ng = make_candidate(member_no="BU0000002", mrccid="MR002", age=24)  # 対象外
+    repo.upsert_candidate(ok, check_eligibility(ok))
+    repo.upsert_candidate(ng, check_eligibility(ng))
+
+    assert repo.settled_mrccids(30) == {"MR002"}
+    repo.close()
+
+
+def test_settled_mrccids_skips_sent_candidates_permanently(tmp_path):
+    """送信済みは期間に関係なく読み飛ばす（二度と送らないので取り込む必要がない）。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    cand = make_candidate(member_no="BU0000003", mrccid="MR003")
+    repo.upsert_candidate(cand, check_eligibility(cand))
+    repo.record_generated(
+        GeneratedScout(
+            member_no="BU0000003",
+            first=ScoutContent(subject="件名", body="本文"),
+            resend=ScoutContent(subject="再送件名", body="再送本文"),
+            model="fake",
+        )
+    )
+    repo.mark_sent("BU0000003", "first", 5)
+
+    assert repo.settled_mrccids(30) == {"MR003"}
+    # 期間指定を無効にしても送信済みは除外され続ける。
+    assert repo.settled_mrccids(0) == {"MR003"}
+    repo.close()
+
+
+def test_settled_mrccids_disabled_with_zero_days(tmp_path):
+    """0日なら対象外の読み飛ばしは無効（毎回全件を取り直す従来の挙動）。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    ng = make_candidate(member_no="BU0000004", mrccid="MR004", age=24)
+    repo.upsert_candidate(ng, check_eligibility(ng))
+    assert repo.settled_mrccids(0) == set()
+    repo.close()
+
+
+def test_settled_mrccids_reevaluates_old_ineligible_records(tmp_path):
+    """期間外の対象外は再び取り込む（年齢・在籍年数は時間で変わるため）。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    ng = make_candidate(member_no="BU0000005", mrccid="MR005", age=24)
+    repo.upsert_candidate(ng, check_eligibility(ng))
+    repo.conn.execute(
+        "UPDATE candidates SET updated_at='2020-01-01T00:00:00' WHERE member_no=?",
+        ("BU0000005",),
+    )
+    repo.conn.commit()
+    assert repo.settled_mrccids(30) == set()
+    repo.close()

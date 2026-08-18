@@ -55,12 +55,16 @@ def _candidates():
 
 
 def test_cap_then_retry_next_run_does_not_lose_candidate(tmp_path):
-    """H1: 1件目で上限に達した候補者が、次回実行で再送信される。"""
+    """H1: 上限で送れなかった候補者が、次回実行で送信される（取りこぼさない）。
+
+    上限に達した時点で以降の取り込み・生成は打ち切るため、2件目は1回目では
+    評価も生成もされない。次回の実行で改めて取り込まれて送信される。
+    """
     db = tmp_path / "t.db"
     gen = FakeGenerator()
     sender = FakeSender("sent")
 
-    # 1回目: 上限1件 → 1件目のみ送信、2件目はスキップ
+    # 1回目: 上限1件 → 1件目のみ送信し、そこで打ち切る
     repo = Repository(db_path=db)
     pipe = ScoutPipeline(repo=repo, generator=gen, sender=sender)
     pipe.settings.max_sends_per_run = 1  # settings はシングルトン
@@ -71,7 +75,7 @@ def test_cap_then_retry_next_run_does_not_lose_candidate(tmp_path):
     sent_first_run = {s[0] for s in sender.sent}
     assert sent_first_run == {"https://ex.com/1"}
 
-    # 2回目: 1件目は送信済みで重複スキップ、2件目は再利用して送信
+    # 2回目: 1件目は送信済みで重複スキップ、2件目を生成して送信
     repo2 = Repository(db_path=db)
     pipe2 = ScoutPipeline(repo=repo2, generator=gen, sender=sender)
     pipe2.settings.max_sends_per_run = 5
@@ -80,12 +84,15 @@ def test_cap_then_retry_next_run_does_not_lose_candidate(tmp_path):
 
     assert report2.skipped_duplicate == 1  # BU1000001
     assert report2.sent == 1               # BU1000002 が今回送信される
-    assert report2.reused == 1             # 再生成せず再利用
+    # 1回目は上限で打ち切ったため2件目は未評価。生成はこの回が初めてになる。
+    assert report2.generated == 1 and report2.reused == 0
     assert any(s[:3] == ("https://ex.com/2", "【Premium Offer】初回", "初回本文")
                for s in sender.sent)
 
-    # 2件目の文面は2回目で再生成されていない（generate は1回目に各1回のみ）
+    # 2件目の文面が無駄に作り直されていない（生成は通算1回だけ）。
     assert gen.calls.count("BU1000002") == 1
+    # 1回目で上限超過分の文面を生成していない（Opus 呼び出しの無駄打ちを防ぐ）。
+    assert report1.generated == 1
 
 
 def test_crash_between_send_and_mark_reuses_idempotency_key(tmp_path):
@@ -253,4 +260,138 @@ def test_dry_run_keeps_generated_and_can_send_later(tmp_path):
     r1 = pipe.run(ListSource(cand), send=True)
     assert r1.dry_run == 1 and r1.sent == 0
     assert repo.first_sent("BU3000001") is False  # 未送信のまま
+    repo.close()
+
+
+# --- 本文の文字数上限（媒体側の制限）------------------------------------------
+
+
+class LongBodyGenerator(FakeGenerator):
+    """初回本文だけが上限超過の文面を作るジェネレータ。"""
+
+    def __init__(self, first_len=3200, resend_len=100):
+        super().__init__()
+        self.first_len = first_len
+        self.resend_len = resend_len
+
+    def generate(self, candidate):
+        self.calls.append(candidate.member_no)
+        return GeneratedScout(
+            member_no=candidate.member_no,
+            first=ScoutContent(subject="【Premium Offer】初回", body="あ" * self.first_len),
+            resend=ScoutContent(subject="【Premium Offer】再送", body="あ" * self.resend_len),
+            model="fake",
+        )
+
+
+def test_over_length_body_is_not_sent(tmp_path):
+    """上限超過の本文は送信せず failed として記録する（送信枠を無駄にしない）。"""
+    db = tmp_path / "t.db"
+    repo = Repository(db_path=db)
+    sender = FakeSender("sent")
+    pipe = ScoutPipeline(repo=repo, generator=LongBodyGenerator(), sender=sender)
+    pipe.settings.max_sends_per_run = 5
+    cand = [make_candidate(member_no="BU7000001", profile_url="https://ex.com/7")]
+    report = pipe.run(ListSource(cand), send=True)
+
+    assert report.failed == 1 and report.sent == 0
+    assert sender.sent == []  # 送信APIを叩いていない
+    row = repo.get_scout("BU7000001", "first")
+    assert row["status"] == "failed"
+    assert "文字数上限" in row["error"]
+    repo.close()
+
+
+def test_over_length_stored_body_is_regenerated_not_reused(tmp_path):
+    """上限超過の保存済み文面は再利用せず作り直す（毎回同じ本文で失敗し続けるのを防ぐ）。"""
+    db = tmp_path / "t.db"
+    cand = [make_candidate(member_no="BU7000002", profile_url="https://ex.com/8")]
+
+    # 1回目: 上限超過の文面が保存され、送信は失敗する。
+    repo = Repository(db_path=db)
+    long_gen = LongBodyGenerator()
+    pipe = ScoutPipeline(repo=repo, generator=long_gen, sender=FakeSender("sent"))
+    pipe.settings.max_sends_per_run = 5
+    pipe.run(ListSource(cand), send=True)
+    repo.close()
+
+    # 2回目: 収まる文面を返すジェネレータなら再生成して送信できる。
+    repo = Repository(db_path=db)
+    ok_gen = FakeGenerator()
+    sender = FakeSender("sent")
+    pipe = ScoutPipeline(repo=repo, generator=ok_gen, sender=sender)
+    pipe.settings.max_sends_per_run = 5
+    report = pipe.run(ListSource(cand), send=True)
+
+    assert ok_gen.calls == ["BU7000002"]  # 再利用せず生成し直している
+    assert report.reused == 0 and report.generated == 1
+    assert report.sent == 1
+    assert repo.first_sent("BU7000002") is True
+    repo.close()
+
+
+def test_over_length_reminder_is_dropped_but_first_send_succeeds(tmp_path):
+    """追客本文だけが上限超過なら、追客を諦めて初回送信は成立させる。"""
+    db = tmp_path / "t.db"
+    repo = Repository(db_path=db)
+    sender = FakeSender("sent")
+    gen = LongBodyGenerator(first_len=100, resend_len=3200)
+    pipe = ScoutPipeline(repo=repo, generator=gen, sender=sender)
+    pipe.settings.max_sends_per_run = 5
+    cand = [make_candidate(member_no="BU7000003", profile_url="https://ex.com/10")]
+    report = pipe.run(ListSource(cand), send=True)
+
+    assert report.sent == 1
+    assert sender.sent[0][3] is None  # reminder は添付されない
+    # 独自再送側で拾えるよう resend は skipped にしない。
+    assert repo.get_scout("BU7000003", "resend")["status"] == "generated"
+    repo.close()
+
+
+def test_stops_ingesting_once_send_total_reached(tmp_path):
+    """上限に達したら以降の候補者は取り込まない（レジュメ取得もLLM呼び出しもしない）。
+
+    生成だけして送らなかった候補者は「評価済み」として次回の取り込みから外れるため、
+    上限超過分まで評価を進めるとその候補者が送信されないまま埋もれる。
+    """
+    consumed: list[str] = []
+
+    class CountingSource:
+        def __init__(self, candidates):
+            self.candidates = candidates
+
+        def __iter__(self):
+            for c in self.candidates:
+                consumed.append(c.member_no)
+                yield c
+
+    db = tmp_path / "t.db"
+    repo = Repository(db_path=db)
+    gen = FakeGenerator()
+    pipe = ScoutPipeline(repo=repo, generator=gen, sender=FakeSender("sent"))
+    pipe.settings.max_sends_per_run = 2
+    cands = [make_candidate(member_no=f"BU800000{i}", profile_url=f"https://ex.com/{i}")
+             for i in range(1, 6)]
+    report = pipe.run(CountingSource(cands), send=True)
+
+    assert report.sent == 2
+    # 3人目は取り込みすら発生していない（上限到達で source の消費を止めている）。
+    assert consumed == ["BU8000001", "BU8000002"]
+    assert report.processed == 2
+    assert gen.calls == ["BU8000001", "BU8000002"]
+    repo.close()
+
+
+def test_generate_only_run_is_not_capped_by_send_limit(tmp_path):
+    """生成のみ（send=False）は送信上限で打ち切らない。"""
+    db = tmp_path / "t.db"
+    repo = Repository(db_path=db)
+    gen = FakeGenerator()
+    pipe = ScoutPipeline(repo=repo, generator=gen, sender=None)
+    pipe.settings.max_sends_per_run = 1
+    cands = [make_candidate(member_no=f"BU810000{i}", profile_url=f"https://ex.com/{i}")
+             for i in range(1, 4)]
+    report = pipe.run(ListSource(cands), send=False)
+
+    assert report.processed == 3 and report.generated == 3
     repo.close()

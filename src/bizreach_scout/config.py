@@ -60,7 +60,10 @@ class Settings(BaseSettings):
 
     # 送信制御
     dry_run: bool = True
-    max_sends_per_run: int = 20
+    # 1実行で送る初回スカウトの上限。**保存検索ごとではなく全保存検索の合計**
+    # （4つ登録していても合計でこの件数まで）。再送にも同じ上限が別枠で適用される。
+    # ピックアップは無料枠のためこの上限を受けない。
+    max_sends_per_run: int = 10
     send_delay_min: float = 20.0
     send_delay_max: float = 60.0
     kill_switch: str = "data/state/STOP"
@@ -68,6 +71,17 @@ class Settings(BaseSettings):
     # 実送信を中断する。GitHub Actions の actions/cache 失効でdedupe DBが消え、
     # 全候補者へ再送信してしまう事故を防ぐための安全弁（本番CIでのみ true 推奨）。
     expect_state: bool = False
+
+    # --- 取り込みカーソル（同じ候補者を毎回取り直さないための設定）---
+    # 保存検索の結果は上位から並ぶため、常に先頭 max_candidates 件を取ると
+    # 「毎日まったく同じ顔ぶれ」を評価し続けることになる（2026-08-14 の本番で、
+    # 7/28 に対象外判定した候補者を17日後にそのまま再取得していた）。
+    # 直近この日数以内に評価済みの候補者は取り込み時に読み飛ばし、
+    # 次ページへカーソルを進めて未評価の候補者を拾う。0 で無効。
+    reevaluate_after_days: int = 30
+    # 上記の読み飛ばしで検索結果を何ページまで辿るか（1ページ=100件）。
+    # 未評価が枯渇したときに無限に巡回しないための上限。
+    ingest_max_pages: int = 20
 
     # 再送までの日数は scout_rules.yaml resend.after_days が単一情報源
     # （config.resend_after_days() 経由で参照する）。

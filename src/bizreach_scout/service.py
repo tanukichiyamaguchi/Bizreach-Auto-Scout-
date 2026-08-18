@@ -82,15 +82,41 @@ def run_cycle(
                     "skipped_duplicate", "skipped_ineligible", "failed")
             agg = dict.fromkeys(keys, 0)
             pipeline = ScoutPipeline(repo=repo, generator=None, sender=sender)
+            # 取り込みカーソル: 直近に評価済みの候補者を読み飛ばし、検索結果の
+            # 次ページへ進む。この集合は全URLで共有し、取り込んだ候補者が追記される
+            # ため、保存検索どうしで結果が重なっても二重取り込みにならない。
+            st = get_settings()
+            skip_mrccids = repo.settled_mrccids(st.reevaluate_after_days)
+            if skip_mrccids:
+                logger.info(
+                    "判定済み（送信済み／直近%d日に対象外）の候補者 %d 件を"
+                    "取り込み対象から除外します。",
+                    st.reevaluate_after_days, len(skip_mrccids),
+                )
+            # 送信上限は保存検索ごとではなく1実行の合計。上限に達したら残りの
+            # 保存検索は開かない（次回の実行で続きから取り込む）。
+            searched = 0
             for i, url in enumerate(urls, start=1):
-                logger.info("検索URL %d/%d を処理します。", i, len(urls))
-                source = BizreachApiSource(url, max_candidates, client=client)
-                # 既送信件数を渡し、複数URLでも1実行あたりの送信上限を守る。
                 sent_so_far = agg["sent"] + agg["dry_run"]
+                if send and sender is not None and sent_so_far >= pipeline.max_sends:
+                    logger.info(
+                        "送信上限(%d・全保存検索の合計)に達したため、残り %d 件の"
+                        "保存検索は次回の実行に回します。",
+                        pipeline.max_sends, len(urls) - i + 1,
+                    )
+                    break
+                logger.info("検索URL %d/%d を処理します。", i, len(urls))
+                source = BizreachApiSource(
+                    url, max_candidates, client=client,
+                    skip_mrccids=skip_mrccids, max_pages=st.ingest_max_pages,
+                )
+                # 既送信件数を渡し、複数URLでも1実行あたりの送信上限を守る。
                 report = pipeline.run(source, send=send, sent_offset=sent_so_far)
+                searched = i
                 for k in keys:
                     agg[k] += getattr(report, k, 0)
-            agg["search_urls"] = len(urls)
+            agg["search_urls"] = searched
+            agg["search_urls_configured"] = len(urls)
             result["pipeline"] = agg
         else:
             logger.info("search_url 未指定のため取り込み・初回送信はスキップします。")

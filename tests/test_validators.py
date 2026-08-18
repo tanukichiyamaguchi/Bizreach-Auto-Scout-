@@ -60,3 +60,14 @@ def test_star_emoji_detected():
     # ⭐ (U+2B50) は補助記号帯。固定フッターの ↓ (U+2193) とは別。
     issues = validate_body("おすすめ⭐です")
     assert any("絵文字" in i for i in issues)
+
+
+def test_body_over_max_chars_is_flagged():
+    """媒体の文字数上限を超える本文は指摘される（超過分を数値で示す）。"""
+    issues = validate_body("あ" * 3001)
+    assert any("本文が長すぎます" in i for i in issues)
+    assert any("3001文字" in i for i in issues)
+
+
+def test_body_at_max_chars_is_ok():
+    assert validate_body("あ" * 3000) == []

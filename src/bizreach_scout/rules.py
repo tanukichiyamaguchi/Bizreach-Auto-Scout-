@@ -63,6 +63,8 @@ class Constraints(BaseModel):
     forbid_emoji: bool = True
     forbid_phrase: list[str] = Field(default_factory=list)
     allowed_url_domains: list[str] = Field(default_factory=list)
+    # 本文の最大文字数（媒体側の制限。超過すると送信APIが400を返す）。0で無効。
+    max_body_chars: int = 3000
 
 
 class MatchingRules(BaseModel):

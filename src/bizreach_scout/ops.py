@@ -175,7 +175,8 @@ def _check_safety_limits() -> Check:
     s = get_settings()
     guard = "有効" if s.expect_state else "無効"
     status = "ok" if s.expect_state else "warn"
-    detail = (f"1実行あたり送信上限={s.max_sends_per_run} / "
+    detail = (f"1実行あたり送信上限={s.max_sends_per_run}件"
+              f"（保存検索ごとではなく全保存検索の合計）/ "
               f"送信間隔={s.send_delay_min:.0f}〜{s.send_delay_max:.0f}秒 / "
               f"状態DB消失ガード={guard}")
     if not s.expect_state:
