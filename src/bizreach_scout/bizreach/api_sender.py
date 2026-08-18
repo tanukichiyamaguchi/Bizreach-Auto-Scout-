@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from ..config import get_settings, scout_job_id
+from ..config import get_settings, scout_job_id, scout_rules
 from ..logging_config import logger
 from ..models import Candidate
 from .outcome import SendOutcome
@@ -30,6 +30,14 @@ class ApiScoutSender:
     def _kill_switch_active(self) -> bool:
         return self.settings.kill_switch_path.exists()
 
+    @staticmethod
+    def _over_limit(text: str) -> str:
+        """本文が媒体の文字数上限を超えていれば理由文を返す（超えていなければ空文字）。"""
+        limit = int(scout_rules().get("constraints", {}).get("max_body_chars", 0) or 0)
+        if limit and len(text or "") > limit:
+            return f"本文が文字数上限({limit})を超過（{len(text)}文字）のため送信しません"
+        return ""
+
     def send_scout(self, candidate: Candidate, subject: str, body: str,
                    reminder: dict | None = None,
                    idempotency_key: str | None = None) -> SendOutcome:
@@ -40,6 +48,13 @@ class ApiScoutSender:
             return SendOutcome("failed", "mrccid が無いため送信不可")
         if not self.job_id:
             return SendOutcome("failed", "scout_job_id が未設定（company.yaml を確認）")
+
+        # 文字数上限の最終防波堤（初回・再送・ピックアップの全経路を通る）。
+        # 超過した本文はAPIが 400 ValidationViolated を返すだけなので、
+        # 送信を試みず理由の分かる失敗として返す。
+        over = self._over_limit(body) or self._over_limit((reminder or {}).get("body", ""))
+        if over:
+            return SendOutcome("failed", over)
 
         if self.pickup:
             # 無料枠のピックアップ送信（プラチナ残数を消費しない）。

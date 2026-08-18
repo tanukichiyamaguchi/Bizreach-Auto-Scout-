@@ -82,9 +82,22 @@ def run_cycle(
                     "skipped_duplicate", "skipped_ineligible", "failed")
             agg = dict.fromkeys(keys, 0)
             pipeline = ScoutPipeline(repo=repo, generator=None, sender=sender)
+            # 取り込みカーソル: 直近に評価済みの候補者を読み飛ばし、検索結果の
+            # 次ページへ進む。この集合は全URLで共有し、取り込んだ候補者が追記される
+            # ため、保存検索どうしで結果が重なっても二重取り込みにならない。
+            st = get_settings()
+            skip_mrccids = repo.recently_evaluated_mrccids(st.reevaluate_after_days)
+            if skip_mrccids:
+                logger.info(
+                    "直近%d日に評価済みの候補者 %d 件を取り込み対象から除外します。",
+                    st.reevaluate_after_days, len(skip_mrccids),
+                )
             for i, url in enumerate(urls, start=1):
                 logger.info("検索URL %d/%d を処理します。", i, len(urls))
-                source = BizreachApiSource(url, max_candidates, client=client)
+                source = BizreachApiSource(
+                    url, max_candidates, client=client,
+                    skip_mrccids=skip_mrccids, max_pages=st.ingest_max_pages,
+                )
                 # 既送信件数を渡し、複数URLでも1実行あたりの送信上限を守る。
                 sent_so_far = agg["sent"] + agg["dry_run"]
                 report = pipeline.run(source, send=send, sent_offset=sent_so_far)

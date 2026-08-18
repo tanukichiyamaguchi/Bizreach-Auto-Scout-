@@ -403,3 +403,78 @@ def test_render_candidate_profile_omits_empty_desired_fields():
                                "otherDesiredText": "土日休み希望"}}, "m9"))
     assert "- 希望勤務地: 大阪府" in filled
     assert "- その他の希望（本人記入）: 土日休み希望" in filled
+
+
+# --- 取り込みカーソル（iter_candidate_ids のページ送り）------------------------
+
+
+class _FakeClient:
+    """human_delay だけを持つ最小スタブ（実待機しない）。"""
+
+    def human_delay(self, *_args, **_kwargs) -> None:
+        return None
+
+
+def _api_with_pages(pages: list[list[str]]) -> tuple[BizreachApi, list[int]]:
+    """pages[i] を i+1 ページ目の mrccid 一覧として返す BizreachApi を作る。
+
+    戻り値は (api, 要求されたページ番号の記録リスト)。
+    """
+    api = BizreachApi.__new__(BizreachApi)
+    api.client = _FakeClient()
+    requested: list[int] = []
+
+    def fake_search_page(condition, page, page_size=100):
+        requested.append(page)
+        if page > len(pages):
+            return {"items": [], "totalCount": 0, "hasNextPage": False}
+        return {
+            "items": [{"mrccid": m} for m in pages[page - 1]],
+            "totalCount": sum(len(p) for p in pages),
+            "hasNextPage": page < len(pages),
+        }
+
+    api.get_search_condition = lambda rrsc: {"dummy": True}  # type: ignore[method-assign]
+    api.search_page = fake_search_page  # type: ignore[method-assign]
+    return api, requested
+
+
+URL = "https://cr-support.jp/search?rrsc=3444981"
+
+
+def test_iter_candidate_ids_returns_top_n_without_skip():
+    """skip 未指定なら従来どおり先頭から max_candidates 件（1ページ目で足りる）。"""
+    api, requested = _api_with_pages([["A", "B", "C"], ["D", "E"]])
+    assert list(api.iter_candidate_ids(URL, max_candidates=2)) == ["A", "B"]
+    assert requested == [1]  # 足りているので2ページ目は取りに行かない
+
+
+def test_iter_candidate_ids_advances_past_evaluated_candidates():
+    """評価済みを飛ばして次ページへ進み、未評価だけを max_candidates 件返す。
+
+    これが無いと 1714 件の検索でも毎回同じ先頭N件を取り直し、すべて対象外
+    スキップされて送信0件が続く（2026-08の本番障害）。
+    """
+    api, requested = _api_with_pages([["A", "B", "C"], ["D", "E", "F"], ["G", "H"]])
+    got = list(api.iter_candidate_ids(URL, max_candidates=3,
+                                      skip_mrccids={"A", "B", "C", "D"}))
+    assert got == ["E", "F", "G"]
+    assert requested == [1, 2, 3]  # 未評価を求めてページを進んでいる
+
+
+def test_iter_candidate_ids_stops_at_max_pages():
+    """全件評価済みでも max_pages で打ち切り、無限巡回しない。"""
+    pages = [[f"P{p}C{i}" for i in range(3)] for p in range(10)]
+    skip = {m for page in pages for m in page}
+    api, requested = _api_with_pages(pages)
+    assert list(api.iter_candidate_ids(URL, max_candidates=5,
+                                       skip_mrccids=skip, max_pages=4)) == []
+    assert requested == [1, 2, 3, 4]
+
+
+def test_iter_candidate_ids_stops_when_results_exhausted():
+    """検索結果を使い切ったら（hasNextPage=False）そこで止まる。"""
+    api, requested = _api_with_pages([["A", "B"], ["C", "D"]])
+    got = list(api.iter_candidate_ids(URL, max_candidates=10, skip_mrccids={"A"}))
+    assert got == ["B", "C", "D"]
+    assert requested == [1, 2]

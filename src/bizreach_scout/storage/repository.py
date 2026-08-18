@@ -400,6 +400,31 @@ class Repository:
         after = self.conn.execute("SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"]
         return after - before
 
+    def recently_evaluated_mrccids(self, within_days: int) -> set[str]:
+        """直近 within_days 日以内に評価済みの候補者の mrccid を返す。
+
+        取り込みは保存検索の**先頭から** max_candidates 件を取るため、評価済みを
+        除外しないと毎回同じ上位N件を取り直し、検索結果の奥にいる新しい候補者へ
+        永久に到達しない（2026-08の本番で、17日離れた実行で同一候補者7名が同じ
+        理由で対象外スキップされ、送信0件が続いていた）。
+
+        期限を切るのは、対象条件のうち会員ステータス・現職在籍年数が時間で変わり、
+        今日の対象外が将来の対象になり得るため。期限切れは再び取り込み対象に戻る。
+        within_days<=0 なら空集合（=従来どおり全件を毎回取り直す）。
+        """
+        if within_days <= 0:
+            return set()
+        cutoff = (datetime.now() - timedelta(days=within_days)).isoformat(timespec="seconds")
+        out: set[str] = set()
+        for r in self.conn.execute(
+            "SELECT profile_json FROM candidates WHERE updated_at >= ?", (cutoff,)
+        ):
+            with contextlib.suppress(Exception):
+                mid = (json.loads(r["profile_json"]) or {}).get("mrccid")
+                if mid:
+                    out.add(mid)
+        return out
+
     def restore_lost_sends(self, entries: Iterable[tuple[str, str, str, str]]) -> int:
         """実行ログから復元した「消えた送信記録」をDBへ戻す（冪等）。
 

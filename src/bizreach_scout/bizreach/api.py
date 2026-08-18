@@ -520,8 +520,20 @@ class BizreachApi:
             return {}
         return resp.json()
 
-    def iter_candidate_ids(self, search_url: str, max_candidates: int = 50) -> Iterator[str]:
-        """保存検索から mrccid を順に返す（ページング）。"""
+    def iter_candidate_ids(self, search_url: str, max_candidates: int = 50,
+                           skip_mrccids: set[str] | None = None,
+                           max_pages: int = 20) -> Iterator[str]:
+        """保存検索から未評価の mrccid を順に返す（ページング）。
+
+        skip_mrccids に評価済みの候補者を渡すと、それらを飛ばして**検索結果の奥へ
+        進みながら** max_candidates 件の新しい候補者を集める。これを渡さないと
+        毎回同じ上位N件を取り直し、検索結果の大半へ永久に到達しない
+        （2026-08の本番で、1714件の検索から毎回同じ先頭10件だけを取得し、
+        すべて対象外スキップされて送信0件が続いていた）。
+
+        max_pages は暴走防止の上限。到達した場合は件数不足でも打ち切ってログに出す。
+        """
+        skip = skip_mrccids or set()
         rrsc = self.parse_rrsc(search_url)
         if not rrsc:
             logger.warning("検索URLから rrsc を取得できません: %s", search_url)
@@ -531,7 +543,8 @@ class BizreachApi:
             return
         page = 1
         yielded = 0
-        while yielded < max_candidates:
+        skipped = 0
+        while yielded < max_candidates and page <= max_pages:
             data = self.search_page(condition, page)
             items = data.get("items") or []
             if not items:
@@ -542,13 +555,24 @@ class BizreachApi:
                 if yielded >= max_candidates:
                     break
                 mid = it.get("mrccid")
-                if mid:
-                    yielded += 1
-                    yield mid
+                if not mid:
+                    continue
+                if mid in skip:
+                    skipped += 1
+                    continue
+                yielded += 1
+                yield mid
             if not data.get("hasNextPage"):
                 break
             page += 1
             self.client.human_delay(1.0, 2.5)
+        if skipped:
+            logger.info("評価済みのため取り込みをスキップ: %d 件（%d ページ走査して新規 %d 件）",
+                        skipped, page, yielded)
+        if yielded < max_candidates and page > max_pages:
+            logger.warning(
+                "ページ上限(%d)に達したため新規候補者が %d 件で打ち切りました"
+                "（未評価の候補者が枯渇しつつある可能性があります）。", max_pages, yielded)
 
     def get_resume(self, mrccid: str) -> dict | None:
         try:

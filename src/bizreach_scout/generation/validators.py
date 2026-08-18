@@ -64,6 +64,16 @@ def validate_body(body: str, rules: dict | None = None) -> list[str]:
     if cfg.get("forbid_emoji", True) and _EMOJI_RE.search(body):
         issues.append("絵文字が含まれています")
 
+    # 本文の文字数上限（媒体側の制限）。超過すると送信APIが400を返して**送信自体が失敗**する。
+    # 他の指摘と違い品質の問題ではなく可用性の問題なので、超過分を数値で示して
+    # モデルが確実に削れるようにする。
+    max_chars = cfg.get("max_body_chars", 0)
+    if max_chars and len(body) > max_chars:
+        issues.append(
+            f"本文が長すぎます（{len(body)}文字 / 上限{max_chars}文字）。"
+            f"{len(body) - max_chars}文字以上短くしてください"
+        )
+
     # 許可ドメイン以外のURL混入を検出（候補者データ由来リンクの注入対策）。
     allowed = cfg.get("allowed_url_domains", [])
     if allowed:

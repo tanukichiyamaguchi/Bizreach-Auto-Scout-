@@ -201,7 +201,12 @@ jobs:
       - name: Run scout (検索スカウト＋再送)
         if: (env.RUN_MODE == 'scout' || github.event_name == 'schedule') && env.SKIP_SEARCH != 'true'
         run: |
-          echo "DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX / SEARCH_URL set: $([ -n "$SEARCH_URL" ] && echo yes || echo no)"
+          # 保存検索を何件読み込んだかをログとサマリに出す（「1つ目しか読まれていない
+          # のでは」という疑いをログだけで判定できるようにする）。
+          URL_COUNT="$(printf '%s' "$SEARCH_URL" | tr '|' '\n' | tr ' ' '\n' | grep -c '^http' || true)"
+          echo "DRY_RUN=$BIZSCOUT_DRY_RUN / MAX=$RUN_MAX（保存検索1件あたり）/ 保存検索=${URL_COUNT}件"
+          echo "検索スカウト: 保存検索 ${URL_COUNT} 件 / 1件あたり最大 ${RUN_MAX} 名を取り込み" \
+            >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$SEARCH_URL" ]; then
             bizscout serve --once --max "$RUN_MAX" --search-url "$SEARCH_URL"
           else

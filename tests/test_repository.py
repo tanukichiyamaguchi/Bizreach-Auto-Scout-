@@ -121,3 +121,38 @@ def test_ineligible_recorded(tmp_path):
     assert len(rows) == 1
     assert "年齢" in rows[0]["eligibility_failed"]
     repo.close()
+
+
+def test_recently_evaluated_mrccids_returns_evaluated_candidates(tmp_path):
+    """評価済み（対象外含む）候補者の mrccid を返す。取り込みカーソルの土台。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    ok = make_candidate(member_no="BU0000001", mrccid="MR001")
+    ng = make_candidate(member_no="BU0000002", mrccid="MR002", age=24)  # 対象外
+    repo.upsert_candidate(ok, check_eligibility(ok))
+    repo.upsert_candidate(ng, check_eligibility(ng))
+
+    # 対象外でも「評価済み」なので次回は取り込まない（同じ人を毎回取り直さない）。
+    assert repo.recently_evaluated_mrccids(30) == {"MR001", "MR002"}
+    repo.close()
+
+
+def test_recently_evaluated_mrccids_disabled_with_zero_days(tmp_path):
+    repo = Repository(db_path=tmp_path / "t.db")
+    cand = make_candidate(member_no="BU0000003", mrccid="MR003")
+    repo.upsert_candidate(cand, check_eligibility(cand))
+    assert repo.recently_evaluated_mrccids(0) == set()
+    repo.close()
+
+
+def test_recently_evaluated_mrccids_ignores_old_records(tmp_path):
+    """期間外（古い評価）は対象外。時間が経てば条件が変わるので再評価する。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    cand = make_candidate(member_no="BU0000004", mrccid="MR004")
+    repo.upsert_candidate(cand, check_eligibility(cand))
+    repo.conn.execute(
+        "UPDATE candidates SET updated_at='2020-01-01T00:00:00' WHERE member_no=?",
+        ("BU0000004",),
+    )
+    repo.conn.commit()
+    assert repo.recently_evaluated_mrccids(30) == set()
+    repo.close()

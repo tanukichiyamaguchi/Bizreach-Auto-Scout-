@@ -69,7 +69,12 @@ class FakeRepository:
 
     def __init__(self, *args, **kwargs):
         self.closed = False
+        self.reevaluate_calls: list[int] = []
         FakeRepository.instances.append(self)
+
+    def recently_evaluated_mrccids(self, within_days):
+        self.reevaluate_calls.append(within_days)
+        return {"BU_ALREADY"}
 
     def close(self):
         self.closed = True
@@ -113,7 +118,12 @@ def patched(monkeypatch):
     monkeypatch.setattr(api_sender_mod, "ApiScoutSender", fake_sender_factory)
 
     def fake_source_factory(search_url=None, max_candidates=50, **kwargs):
-        s = SimpleNamespace(search_url=search_url, max_candidates=max_candidates)
+        s = SimpleNamespace(
+            search_url=search_url,
+            max_candidates=max_candidates,
+            skip_mrccids=kwargs.get("skip_mrccids"),
+            max_pages=kwargs.get("max_pages"),
+        )
         calls["source"].append(s)
         return s
 
@@ -218,6 +228,24 @@ def test_run_cycle_multiple_search_urls_aggregates(patched):
     }
     # 2URL目には既送信件数が sent_offset として渡る。
     assert FakePipeline.instances[0].run_calls[1][2].get("sent_offset") == 2
+
+
+def test_run_cycle_shares_ingest_cursor_across_search_urls(patched):
+    """評価済み候補者の集合を全検索URLで共有する（同じ人を2度取り込まない）。
+
+    集合は取り込み済みの mrccid が追記される想定なので、URLごとに作り直すと
+    保存検索どうしで結果が重なったときに二重取り込みになる。
+    """
+    service.run_cycle(search_url="https://ex.com/s1 https://ex.com/s2")
+
+    sources = patched["source"]
+    assert len(sources) == 2
+    # 直近評価済みの集合を取りに行き、それを全URLへ同一オブジェクトで渡している。
+    assert FakeRepository.instances[0].reevaluate_calls  # 呼ばれている
+    assert sources[0].skip_mrccids == {"BU_ALREADY"}
+    assert sources[0].skip_mrccids is sources[1].skip_mrccids
+    # ページ送りの上限も渡る。
+    assert sources[0].max_pages == service.get_settings().ingest_max_pages
 
 
 def test_run_cycle_closes_client_and_repo(patched):
