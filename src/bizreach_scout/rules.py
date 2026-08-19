@@ -112,6 +112,8 @@ class ScheduleRules(BaseModel):
     search_skip_weekdays: list[int] = Field(default_factory=list)
     # 日本の祝日も通常スカウトを送らない。
     search_skip_holidays: bool = False
+    # 祝日の前日も通常スカウトを送らない（翌日が休みだと読まれずに埋もれるため）。
+    search_skip_holiday_eve: bool = False
     # 追加の休止日（YYYY-MM-DD）。
     search_skip_dates: list[str] = Field(default_factory=list)
 
