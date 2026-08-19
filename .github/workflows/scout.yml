@@ -63,7 +63,7 @@ jobs:
       BIZREACH_EMAIL: ${{ secrets.BIZREACH_EMAIL }}
       BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
       BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-5' }}
-      BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '20' }}
+      BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '10' }}
       # 状態DB消失ガード。送信履歴が空のまま実送信しようとしたら中断する
       # （actions/cache 失効で重複防止データが消え、全候補者へ再送信する事故を防ぐ）。
       # 既定を true にしているのは、本番が既に多数の送信実績を持つため。
