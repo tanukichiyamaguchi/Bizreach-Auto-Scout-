@@ -378,11 +378,12 @@ def sync_replies_cmd(max_checks: int | None, headless: bool) -> None:
 
 @cli.command(name="check-schedule")
 @click.option("--kind", type=click.Choice(["search", "pickup"]), default="search",
-              help="search=通常スカウト（土日祝は休止） / pickup=ピックアップ（毎日送信）")
+              help="search=通常スカウト（金土日・祝日・祝日前日は休止） / "
+                   "pickup=ピックアップ（毎日送信）")
 def check_schedule(kind: str) -> None:
     """本日その種別を送信してよいかを判定する（送る=exit 0 / 送らない=exit 1）。
 
-    定期実行のワークフローから呼び、通常スカウトの土日祝スキップに使う。
+    定期実行のワークフローから呼び、通常スカウトの休止日スキップに使う。
     ピックアップは無料枠かつ当日限りのため常に送信可。
 
     出力の先頭に SEND: / SKIP: を付ける（呼び出し側はこの文字列で判定する）。

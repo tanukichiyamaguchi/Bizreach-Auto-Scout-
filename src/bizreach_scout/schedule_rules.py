@@ -1,7 +1,8 @@
 """送信曜日の運用ルール（通常スカウトの休止日判定）。
 
 運用ルール:
-- **通常スカウト（検索スカウト＋再送）は土日祝日に送らない**（相手の休日に届かせない）。
+- **通常スカウト（検索スカウト＋再送）は金土日・祝日・祝日の前日に送らない**。
+  相手の休日に届かせない、かつ翌日が休みの日にも送らない（読まれずに埋もれるため）。
 - **ピックアップ（本日のピックアップ・無料枠）は毎日送る**（当日限りの枠のため止めない）。
 
 判定は日本時間の日付で行う。祝日は jpholiday（振替休日・国民の休日・春分/秋分に対応）
@@ -10,7 +11,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from .config import scout_rules
 
@@ -53,6 +54,11 @@ def search_scout_pause_reason(now: datetime | date | None = None,
         name = holiday_name(d)
         if name:
             return f"{iso} は祝日（{name}）のため休止対象です"
+
+    if cfg.get("search_skip_holiday_eve", False):
+        eve_of = holiday_name(d + timedelta(days=1))
+        if eve_of:
+            return f"{iso} は祝日（{eve_of}）の前日のため休止対象です"
 
     return ""
 

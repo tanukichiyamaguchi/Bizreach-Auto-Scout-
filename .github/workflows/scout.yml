@@ -63,7 +63,7 @@ jobs:
       BIZREACH_EMAIL: ${{ secrets.BIZREACH_EMAIL }}
       BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
       BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-5' }}
-      BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '10' }}
+      BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '20' }}
       # 状態DB消失ガード。送信履歴が空のまま実送信しようとしたら中断する
       # （actions/cache 失効で重複防止データが消え、全候補者へ再送信する事故を防ぐ）。
       # 既定を true にしているのは、本番が既に多数の送信実績を持つため。
@@ -127,7 +127,8 @@ jobs:
             echo "$SEARCH_URL_VAL"
             echo "__BIZSCOUT_EOF__"
           } >> "$GITHUB_ENV"
-          # 運用ルール: 土日祝(JST)の定期実行はピックアップ（無料枠・毎日送信）のみとし、
+          # 運用ルール: 金土日・祝日・祝日前日(JST)の定期実行はピックアップ
+          # （無料枠・毎日送信）のみとし、
           # 通常スカウト（検索スカウト＋再送）はスキップする。判定は config/scout_rules.yaml の
           # schedule セクションに基づき bizscout check-schedule が行う（祝日は振替休日・
           # 国民の休日も判定）。手動実行(workflow_dispatch)は明示操作なので対象外。
@@ -197,7 +198,8 @@ jobs:
           echo "⚠️ 本日のピックアップ送信が失敗しました（認証切れ・全件失敗の可能性）。" >> "$GITHUB_STEP_SUMMARY"
 
       # 検索スカウト（プラチナ枠）＋再送。schedule と mode=scout で実行。
-      # ただし土日祝(JST)の定期実行は SKIP_SEARCH=true でスキップ（ピックアップのみ運用）。
+      # ただし金土日・祝日・祝日前日(JST)の定期実行は SKIP_SEARCH=true でスキップ
+      # （ピックアップのみ運用）。
       - name: Run scout (検索スカウト＋再送)
         if: (env.RUN_MODE == 'scout' || github.event_name == 'schedule') && env.SKIP_SEARCH != 'true'
         run: |

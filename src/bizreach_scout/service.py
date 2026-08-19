@@ -117,6 +117,20 @@ def run_cycle(
                     agg[k] += getattr(report, k, 0)
             agg["search_urls"] = searched
             agg["search_urls_configured"] = len(urls)
+            # 全ての保存検索を使い切っても送信目標に届かなかった場合は、取り込み
+            # 件数（BIZSCOUT_MAX・保存検索1件あたり）が足りていない可能性が高い。
+            # 黙って少なく送るとルール変更に気づけないため警告として残す。
+            total_sent = agg["sent"] + agg["dry_run"]
+            if send and sender is not None and searched >= len(urls) \
+                    and total_sent < pipeline.max_sends:
+                logger.warning(
+                    "保存検索を全て処理しましたが送信は %d 件で、目標の %d 件に"
+                    "届きませんでした（取り込み %d 件・うち対象外 %d 件）。"
+                    "保存検索1件あたりの取り込み上限(--max/BIZSCOUT_MAX=%d)を"
+                    "増やすか、保存検索の条件を広げてください。",
+                    total_sent, pipeline.max_sends, agg["processed"],
+                    agg["skipped_ineligible"], max_candidates,
+                )
             result["pipeline"] = agg
         else:
             logger.info("search_url 未指定のため取り込み・初回送信はスキップします。")

@@ -1,4 +1,4 @@
-"""送信曜日の運用ルール（土日祝は通常スカウトを送らない）のテスト。
+"""送信曜日の運用ルール（金土日・祝日・祝日前日は通常スカウトを送らない）のテスト。
 
 ピックアップ（無料枠）はこの制限を受けず毎日送信する運用のため、この判定の対象外。
 """
@@ -14,8 +14,9 @@ from bizreach_scout.schedule_rules import (
 )
 
 RULES = {"schedule": {
-    "search_skip_weekdays": [6, 7],
+    "search_skip_weekdays": [5, 6, 7],
     "search_skip_holidays": True,
+    "search_skip_holiday_eve": True,
     "search_skip_dates": ["2026-12-30"],
 }}
 
@@ -69,9 +70,45 @@ def test_holiday_name_returns_empty_for_normal_day():
     assert holiday_name(date(2026, 7, 20)) == "海の日"
 
 
-def test_production_rules_pause_weekend_and_holiday():
-    # 実際の config/scout_rules.yaml で土日祝が休止対象になっていること。
+def test_friday_is_paused():
+    """金曜は翌日から休みで読まれずに埋もれるため休止対象。"""
+    assert should_send_search_scout(date(2026, 7, 24), RULES) is False  # 金
+    assert "金曜日" in search_scout_pause_reason(date(2026, 7, 24), RULES)
+
+
+def test_day_before_holiday_is_paused():
+    """祝日の前日も休止対象（金曜を止めるのと同じ理由）。"""
+    # 2026-08-11(火) 山の日 → 前日の 8-10(月) は休止。
+    reason = search_scout_pause_reason(date(2026, 8, 10), RULES)
+    assert should_send_search_scout(date(2026, 8, 10), RULES) is False
+    assert "前日" in reason and "山の日" in reason
+
+
+def test_day_before_holiday_only_applies_to_holidays():
+    """翌日がただの平日なら休止しない（前日判定が広がりすぎないこと）。"""
+    # 2026-08-12(水) は平日 → 前日の 8-11 は祝日だが、8-12 自体は送信可。
+    assert should_send_search_scout(date(2026, 8, 12), RULES) is True
+
+
+def test_holiday_eve_can_be_disabled():
+    """search_skip_holiday_eve を切れば前日は休止しない。"""
+    rules = {"schedule": dict(RULES["schedule"], search_skip_holiday_eve=False)}
+    assert should_send_search_scout(date(2026, 8, 10), rules) is True
+
+
+def test_production_rules_pause_friday_weekend_holiday_and_eve():
+    # 実際の config/scout_rules.yaml の設定を検証する。
+    assert should_send_search_scout(date(2026, 7, 24)) is False   # 金
     assert should_send_search_scout(date(2026, 7, 25)) is False   # 土
     assert should_send_search_scout(date(2026, 7, 26)) is False   # 日
     assert should_send_search_scout(date(2026, 7, 20)) is False   # 海の日
-    assert should_send_search_scout(date(2026, 7, 28)) is True    # 平日
+    assert should_send_search_scout(date(2026, 8, 10)) is False   # 山の日の前日
+    assert should_send_search_scout(date(2026, 7, 28)) is True    # 火（送信日）
+
+
+def test_production_rules_send_on_monday_to_thursday():
+    """通常週は月〜木のみ送信する。"""
+    # 2026-08-17(月)〜08-21(金) の週。祝日なし。
+    sendable = [d for d in range(17, 22)
+                if should_send_search_scout(date(2026, 8, d))]
+    assert sendable == [17, 18, 19, 20]  # 月火水木のみ（金は休止）
