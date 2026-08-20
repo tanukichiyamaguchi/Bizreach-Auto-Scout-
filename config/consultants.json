@@ -68,17 +68,6 @@
       "tags": ["finance", "ma", "consulting", "keio"]
     },
     {
-      "id": "yamamoto",
-      "display_name": "山本 峻士",
-      "former_companies": ["ヤンセン・ファーマ", "プルデンシャル生命保険"],
-      "industries": ["製薬", "医療", "生命保険", "保険"],
-      "universities": ["日本大学"],
-      "roles": ["MR（医薬情報担当）", "ライフプランナー", "営業"],
-      "specialties": ["無形商材営業", "医療従事者向け営業", "顧客信頼構築"],
-      "profile_url": "https://www.consuldent.jp/member/yamamoto",
-      "tags": ["insurance", "prudential", "pharma", "medical", "sales"]
-    },
-    {
       "id": "yamashita",
       "display_name": "山下 淳平",
       "former_companies": ["アパレルメーカー", "リクルート"],

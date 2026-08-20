@@ -16,8 +16,8 @@ SAMPLE = [
     ConsultantProfile(id="c002", display_name="B.K（リクルート出身）",
                       former_companies=["リクルートライフスタイル"], tags=["recruit"],
                       profile_url="https://example.com/c002"),
-    ConsultantProfile(id="c008", display_name="H.M（プルデンシャル出身）",
-                      former_companies=["プルデンシャル生命"], industries=["保険"],
+    ConsultantProfile(id="c008", display_name="H.M（保険出身）",
+                      former_companies=["サンプル生命"], industries=["保険"],
                       tags=["insurance"], profile_url="https://example.com/c008"),
     ConsultantProfile(id="c009", display_name="N.F（コンサル出身）",
                       former_companies=["アクセンチュア"], tags=["consultant"],
@@ -32,7 +32,7 @@ def test_recruit_flag_detected():
 
 
 def test_insurance_flag_detected():
-    cand = make_candidate(prior_companies=["プルデンシャル生命"], industry="保険")
+    cand = make_candidate(prior_companies=["サンプル生命"], industry="保険")
     flags = candidate_flags(cand)
     assert flags["is_insurance"] is True
 
@@ -334,33 +334,41 @@ def test_signer_excluded_by_name_even_if_id_changed():
     assert [m.consultant.id for m in intro] == ["c002"]
 
 
-def test_yamamoto_is_excluded_with_production_rules():
-    """本番設定＋実データで、山本がどの経路（共通点/フォールバック）でも紹介されない。
+def test_departed_consultants_are_absent_from_data_not_just_excluded():
+    """在籍していない人は除外リストではなく consultants.json から消えていること。
 
-    2026-08-02 の運用指示「山本については今後スカウトの内容には掲載しない」の回帰テスト。
-    設定は実際の config/scout_rules.yaml、コンサルタントは実データ（無ければサンプル）を使う。
+    除外リストは「在籍しているが紹介しない人（署名者本人など）」のためのもの。
+    退職者をデータに残したまま除外だけで対処すると、氏名は出ないのに前職企業などの
+    属性が訴求の根拠として生き残る（2026-08 の事故がこの形だった）。
+    除外対象として残ってよいのは署名者のみ、というのがこのテストの不変条件。
     """
+    from bizreach_scout.config import scout_rules
+
+    cfg = scout_rules()["matching"]
+    assert cfg.get("exclude_consultant_ids") == ["iwabuchi"]
+    assert cfg.get("exclude_consultant_names") == ["岩渕"]
+
+
+def test_signer_is_excluded_with_production_rules():
+    """署名者は実データ・本番設定のどの経路でも紹介されない。"""
     from bizreach_scout.config import load_consultants, scout_rules
 
     pool = load_consultants()
-    if not any("山本" in c.display_name for c in pool):
-        return  # サンプルデータ環境では対象外
     rules = scout_rules()
-    assert "yamamoto" in rules["matching"]["exclude_consultant_ids"]
-    assert "山本" in rules["matching"]["exclude_consultant_names"]
+    signer = next((c for c in pool if "岩渕" in c.display_name), None)
+    if signer is None:
+        return  # サンプルデータ環境では対象外
 
-    # 山本本人と共通点だらけの候補者を作っても、紹介には選ばれない。
-    yama = next(c for c in pool if "山本" in c.display_name)
     cand = make_candidate(
-        current_company=(yama.former_companies[0] if yama.former_companies else "無関係"),
-        prior_companies=list(yama.former_companies),
-        university=(yama.universities[0] if yama.universities else ""),
-        job_function=(yama.roles[0] if yama.roles else ""),
+        current_company=(signer.former_companies[0] if signer.former_companies else "無関係"),
+        prior_companies=list(signer.former_companies),
+        university=(signer.universities[0] if signer.universities else ""),
+        job_function=(signer.roles[0] if signer.roles else ""),
     )
     matches = match_consultants(cand, consultants=pool, rules=rules)
     intro = select_intro_matches(cand, matches, rules=rules, consultants=pool)
-    assert all("山本" not in m.consultant.display_name for m in matches)
-    assert all("山本" not in m.consultant.display_name for m in intro)
+    assert all("岩渕" not in m.consultant.display_name for m in matches)
+    assert all("岩渕" not in m.consultant.display_name for m in intro)
     assert len(intro) >= 1  # 除外しても紹介人数は確保される
 
 
@@ -372,12 +380,12 @@ def test_visible_consultants_with_tag_excludes_hidden_ones():
     from bizreach_scout.consultants import visible_consultants_with_tag
 
     pool = [
-        ConsultantProfile(id="yamamoto", display_name="山本 峻士",
-                          former_companies=["プルデンシャル生命保険"],
-                          tags=["insurance", "prudential"]),
+        ConsultantProfile(id="hidden", display_name="非公開 太郎",
+                          former_companies=["サンプル生命保険"],
+                          tags=["insurance"]),
         ConsultantProfile(id="other", display_name="別 太郎", tags=["recruit"]),
     ]
-    rules = {"matching": {"exclude_consultant_ids": ["yamamoto"]}}
+    rules = {"matching": {"exclude_consultant_ids": ["hidden"]}}
     assert visible_consultants_with_tag("insurance", rules, pool) == []
     assert [c.id for c in visible_consultants_with_tag("recruit", rules, pool)] == ["other"]
 
@@ -386,8 +394,8 @@ def test_visible_consultants_with_tag_excludes_by_name_too():
     """ID が振り直されても氏名で除外できること（in_house 主張の保険）。"""
     from bizreach_scout.consultants import visible_consultants_with_tag
 
-    pool = [ConsultantProfile(id="c999", display_name="山本 峻士", tags=["insurance"])]
-    rules = {"matching": {"exclude_consultant_names": ["山本"]}}
+    pool = [ConsultantProfile(id="c999", display_name="非公開 太郎", tags=["insurance"])]
+    rules = {"matching": {"exclude_consultant_names": ["非公開"]}}
     assert visible_consultants_with_tag("insurance", rules, pool) == []
 
 

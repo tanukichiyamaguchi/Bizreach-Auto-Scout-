@@ -121,12 +121,56 @@ def parse_docx(path: str | Path) -> list[ConsultantProfile]:
     return consultants
 
 
+def _existing_display_names(out_path: str | Path) -> set[str]:
+    """既存 consultants.json に載っている表示名の集合（読めなければ空集合）。"""
+    try:
+        data = json.loads(Path(out_path).read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    items = data.get("consultants", data) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return set()
+    return {str(c.get("display_name", "")).strip()
+            for c in items if isinstance(c, dict) and c.get("display_name")}
+
+
+def _log_roster_changes(out_path: str | Path, consultants: list[ConsultantProfile]) -> None:
+    """再生成で名簿から増減する人をログに出す。
+
+    取り込みは全件置き換えのため、名簿から外したはずの人が docx に残っていると黙って
+    復活する。復活した人はそのままスカウト文面で紹介されるため、増減を必ず可視化する。
+    """
+    from .logging_config import logger
+
+    before = _existing_display_names(out_path)
+    if not before:
+        return  # 初回生成時は比較対象が無い
+    after = {c.display_name.strip() for c in consultants if c.display_name}
+    added, removed = sorted(after - before), sorted(before - after)
+    if removed:
+        logger.info("取り込みで名簿から外れる人: %s", "、".join(removed))
+    if added:
+        logger.warning(
+            "取り込みで名簿に加わる人: %s。"
+            "意図して名簿から外した人が取り込み元に残っていないか確認してください"
+            "（この一覧の人はスカウト文面で紹介されます）。",
+            "、".join(added),
+        )
+    if not added and not removed:
+        logger.info("名簿の顔ぶれに変更はありません（%d 名）。", len(after))
+
+
 def import_to_json(docx_path: str | Path, out_path: str | Path, force: bool = False) -> int:
     """docx を解析して consultants.json を生成する。解析件数を返す。
 
-    安全策: 解析結果が0件のとき、既存の out_path に有効なコンサルタントが入っている場合は
+    安全策1: 解析結果が0件のとき、既存の out_path に有効なコンサルタントが入っている場合は
     上書きしない（RuntimeError）。docx の書式違いで空になり、既存の良いデータを潰して
     全メールから紹介が消える事故を防ぐ。force=True で明示的に上書きできる。
+
+    安全策2: このコマンドは consultants.json を**丸ごと作り直す**（差分マージではない）。
+    そのため、意図して名簿から外した人が取り込み元 docx に残っていると、黙って復活し
+    そのままスカウト文面で紹介されてしまう。誰が増減したかを必ずログに出し、増えた人が
+    いる場合は目視確認を促す。
     """
     consultants = parse_docx(docx_path)
     if not consultants and not force:
@@ -137,6 +181,7 @@ def import_to_json(docx_path: str | Path, out_path: str | Path, force: bool = Fa
                 "登録されているため、上書きを中止しました（空データで全メールの紹介が消えるのを防止）。"
                 "docx の書式を確認するか、意図的な場合は force=True で実行してください。"
             )
+    _log_roster_changes(out_path, consultants)
     payload = {
         "_note": f"{Path(docx_path).name} から自動生成。内容を必ず確認してください。",
         "consultants": [c.model_dump() for c in consultants],
