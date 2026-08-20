@@ -362,3 +362,42 @@ def test_yamamoto_is_excluded_with_production_rules():
     assert all("山本" not in m.consultant.display_name for m in matches)
     assert all("山本" not in m.consultant.display_name for m in intro)
     assert len(intro) >= 1  # 除外しても紹介人数は確保される
+
+
+# --- 在籍主張の裏づけ（visible_consultants_with_tag）--------------------------
+
+
+def test_visible_consultants_with_tag_excludes_hidden_ones():
+    """除外設定のコンサルタントは「在籍している」の根拠にならない。"""
+    from bizreach_scout.consultants import visible_consultants_with_tag
+
+    pool = [
+        ConsultantProfile(id="yamamoto", display_name="山本 峻士",
+                          former_companies=["プルデンシャル生命保険"],
+                          tags=["insurance", "prudential"]),
+        ConsultantProfile(id="other", display_name="別 太郎", tags=["recruit"]),
+    ]
+    rules = {"matching": {"exclude_consultant_ids": ["yamamoto"]}}
+    assert visible_consultants_with_tag("insurance", rules, pool) == []
+    assert [c.id for c in visible_consultants_with_tag("recruit", rules, pool)] == ["other"]
+
+
+def test_visible_consultants_with_tag_excludes_by_name_too():
+    """ID が振り直されても氏名で除外できること（in_house 主張の保険）。"""
+    from bizreach_scout.consultants import visible_consultants_with_tag
+
+    pool = [ConsultantProfile(id="c999", display_name="山本 峻士", tags=["insurance"])]
+    rules = {"matching": {"exclude_consultant_names": ["山本"]}}
+    assert visible_consultants_with_tag("insurance", rules, pool) == []
+
+
+def test_production_config_has_no_introducible_insurance_consultant():
+    """実データで保険出身の紹介可能者がいないこと（在籍主張の前提を固定する）。
+
+    ここが空である限り、保険出身候補者への「当社にも◯◯出身者が在籍」という
+    訴求は出力されない。将来該当者が入社して consultants.json に追加されれば、
+    このテストが落ちることで訴求が復活したことに気づける。
+    """
+    from bizreach_scout.consultants import visible_consultants_with_tag
+
+    assert visible_consultants_with_tag("insurance") == []

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from ..config import company_config, prompt_template, scout_rules
-from ..consultants import candidate_flags, render_matches_block
-from ..models import Candidate, ConsultantMatch
+from ..consultants import candidate_flags, render_matches_block, visible_consultants_with_tag
+from ..models import Candidate, ConsultantMatch, ConsultantProfile
 
 # Claude に構造化出力を強制するためのツール定義。
 EMIT_SCOUT_TOOL = {
@@ -189,25 +189,56 @@ def render_tone_guidance(candidate: Candidate, rules: dict | None = None) -> tup
 
 
 def render_special_instructions(
-    candidate: Candidate, rules: dict | None = None, company: dict | None = None
+    candidate: Candidate,
+    rules: dict | None = None,
+    company: dict | None = None,
+    consultants: list[ConsultantProfile] | None = None,
 ) -> str:
+    """出身カテゴリ（リクルート/保険）に応じた訴求指示を返す。
+
+    **「当社に◯◯出身の人材がいます」は、実際に紹介できる在籍者がいる場合のみ出す。**
+    候補者側の出身だけで訴求を組み立てると、当社側に該当者がいなくても在籍を主張して
+    しまう。2026-08 に、退職済みの保険出身者を根拠にした「当社にプルデンシャル生命
+    出身の人材が在籍しており…」という記述が実際に送信された。特定企業名は当社側の
+    在籍状況が変われば嘘になるため、ここには固定で書かない。
+    """
     company = company or company_config()
     appeals = company.get("appeals", {})
     flags = candidate_flags(candidate, rules)
     out: list[str] = []
-    if flags["is_recruit"]:
-        count = appeals.get("recruit_consultant_count", 7)
+    if flags["is_recruit"] and visible_consultants_with_tag("recruit", rules, consultants):
+        count = appeals.get("recruit_consultant_count", 0)
+        headcount = f"が{count}名在籍している" if count else "が在籍している"
         out.append(
-            f"この候補者はリクルート出身です。当社にリクルート出身のコンサルタントが{count}名"
-            "在籍している旨をscout_reasonで必ず伝えてください。また、共通点のあるコンサルタント"
+            f"この候補者はリクルート出身です。当社にリクルート出身のコンサルタント{headcount}"
+            "旨をscout_reasonで必ず伝えてください。また、共通点のあるコンサルタント"
             "一覧のうちリクルート出身者は、consultant_intros に必ず全員含めてください（省略禁止）。"
         )
-    if flags["is_insurance"]:
-        url = appeals.get("insurance_reference_url", "https://www.consuldent.jp/recruitment/2020/04/3272/")
+    if flags["is_insurance"] and visible_consultants_with_tag("insurance", rules, consultants):
         out.append(
-            "この候補者は保険業界出身です。当社にプルデンシャル生命出身の人材も在籍していることを"
-            f"アピールし、URL {url} をscout_reasonで紹介してください。また、共通点のあるコンサルタント"
-            "一覧のうち保険出身者は、consultant_intros に必ず含めてください（省略禁止）。"
+            "この候補者は保険業界出身です。共通点のあるコンサルタント一覧のうち保険業界出身者は、"
+            "consultant_intros に必ず含めてください（省略禁止）。"
+            "紹介してよいのは一覧に載っている在籍コンサルタントだけです。"
+            "一覧に無い人物や、特定の保険会社の出身者が当社にいるといった記述はしないでください。"
+        )
+    # 候補者側は該当するのに当社側に在籍者がいないカテゴリは、黙って落とさず
+    # 「触れてはいけない」と明示する。指示が無いだけだとモデルが気を利かせて
+    # 「当社にも同業出身者が」と書いてしまう余地が残るため。
+    unbacked = [
+        label
+        for flag, tag, label in (
+            ("is_recruit", "recruit", "リクルート"),
+            ("is_insurance", "insurance", "保険業界"),
+        )
+        if flags[flag] and not visible_consultants_with_tag(tag, rules, consultants)
+    ]
+    if unbacked:
+        out.append(
+            f"この候補者は{'・'.join(unbacked)}出身ですが、当社には現在その出身の"
+            "紹介可能なコンサルタントがいません。"
+            f"「当社にも{'・'.join(unbacked)}出身の人材がいる」といった記述は"
+            "事実と異なるため、絶対に書かないでください。"
+            "候補者本人の経歴として触れるのは構いません。"
         )
     if not out:
         out.append("特別な出身カテゴリ（リクルート/保険）は検出されていません。")

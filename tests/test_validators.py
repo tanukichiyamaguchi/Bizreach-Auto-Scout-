@@ -71,3 +71,16 @@ def test_body_over_max_chars_is_flagged():
 
 def test_body_at_max_chars_is_ok():
     assert validate_body("あ" * 3000) == []
+
+
+def test_stale_consultant_url_is_forbidden():
+    """退職済みコンサルタントの紹介ページURLは本文に出せない（回帰の最終防波堤）。
+
+    2026-08 に「当社にもプルデンシャル生命出身の人材が在籍しており」という文面と
+    ともにこのURLが実送信された。生成側の指示を直したうえで、文面に出た場合は
+    バリデーションで検知して作り直させる。
+    """
+    body = ("当社にもプルデンシャル生命出身の人材が在籍しており、その歩みを"
+            "こちらでご覧いただけます。https://www.consuldent.jp/recruitment/2020/04/3272/")
+    issues = validate_body(body)
+    assert any("3272" in i for i in issues)

@@ -73,7 +73,8 @@ requirements:
 
 # 出身別アピールの事実値（プロンプトに差し込む）
 appeals:
-  recruit_consultant_count: 7   # リクルート出身コンサルタントの在籍人数
-  insurance_reference_url: https://www.consuldent.jp/recruitment/2020/04/3272/
+  # リクルート出身コンサルタントの在籍人数。0にすると人数に触れず「在籍している」とだけ伝える。
+  # 訴求自体は consultants.json に紹介可能な recruit タグの在籍者がいる場合のみ行う。
+  recruit_consultant_count: 7
   atmosphere_url: https://www.consuldent.jp/recruitment/
   members_url: https://www.consuldent.jp/members.html

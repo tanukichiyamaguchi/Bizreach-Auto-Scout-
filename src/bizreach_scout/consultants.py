@@ -122,6 +122,22 @@ def _company_hits(candidate_companies: list[str], former_companies: list[str],
     return _contains_any(candidate_companies, specific)
 
 
+def visible_consultants_with_tag(
+    tag: str,
+    rules: dict | None = None,
+    consultants: list[ConsultantProfile] | None = None,
+) -> list[ConsultantProfile]:
+    """そのタグを持ち、かつ**紹介対象として在籍している**コンサルタントを返す。
+
+    「当社に◯◯出身の人材がいます」という訴求は、実際にその人を紹介できる場合のみ
+    許される。除外設定（退職・署名者本人など）で誰も残らないタグを訴求すると、
+    事実と異なる文面になる（2026-08 に、退職済みの保険出身者を根拠にした
+    「当社にプルデンシャル生命出身の人材が在籍」という記述が送信された）。
+    """
+    pool = consultants if consultants is not None else load_consultants()
+    return [c for c in _visible_consultants(pool, rules) if tag in c.tags]
+
+
 def candidate_flags(candidate: Candidate, rules: dict | None = None) -> dict[str, bool]:
     """候補者の出身カテゴリ（リクルート/保険）を判定する。"""
     cfg = (rules or scout_rules()).get("matching", {})
