@@ -273,3 +273,72 @@ def test_sync_restores_lost_sends_into_weekly(tmp_path, monkeypatch):
     i_normal = header.index("通常スカウト送信")
     i_pickup = header.index("ピックアップ送信")
     assert (week[i_sent], week[i_normal], week[i_pickup]) == (2, 1, 1)
+
+
+# --- シートの巻き戻り防止 ----------------------------------------------------
+
+def _sheet_with_members(members: list[str]) -> FakeSheets:
+    """会員番号入りの送信ログシートを模擬する（注記行 + ヘッダー + データ）。"""
+    from bizreach_scout.analytics.sync import SENT_LOG_HEADER, SENT_LOG_NOTE
+
+    rows = [[SENT_LOG_NOTE], list(SENT_LOG_HEADER)]
+    for m in members:
+        rows.append([m] + [""] * (len(SENT_LOG_HEADER) - 1))
+    return FakeSheets({SENT_LOG_SHEET: rows})
+
+
+def test_sync_refuses_to_shrink_the_sheet(tmp_path):
+    """シートに記録があるのにDBが空なら、上書きせず中止する。"""
+    from bizreach_scout.analytics.sync import SheetRegressionError
+
+    repo = Repository(db_path=tmp_path / "t.db")          # 巻き戻った空のDB
+    sheets = _sheet_with_members([f"BU{i:07d}" for i in range(1, 21)])
+    before = [list(r) for r in sheets.data[SENT_LOG_SHEET]]
+
+    with pytest.raises(SheetRegressionError) as ei:
+        sync_analytics(repo, sheets, now=datetime(2026, 8, 23, 12, 0),
+                       with_charts=False, trend_fn=None)
+    repo.close()
+
+    assert "20 件" in str(ei.value)
+    assert "restore-db" in str(ei.value)
+    # シートは1行も書き換わっていない。
+    assert sheets.data[SENT_LOG_SHEET] == before
+    assert WEEKLY_SHEET not in sheets.data
+
+
+def test_sync_allows_shrink_when_explicitly_forced(tmp_path):
+    """--allow-shrink 相当の指定があれば従来どおり書き換える。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    sheets = _sheet_with_members([f"BU{i:07d}" for i in range(1, 21)])
+    report = sync_analytics(repo, sheets, now=datetime(2026, 8, 23, 12, 0),
+                            with_charts=False, trend_fn=None, allow_shrink=True)
+    repo.close()
+    assert report.members == 0
+    assert WEEKLY_SHEET in sheets.data
+
+
+def test_sync_allows_growth_and_equal_counts(tmp_path, monkeypatch):
+    """件数が増える/同数の通常ケースは従来どおり通る。"""
+    from bizreach_scout.analytics import sync as sync_mod
+
+    repo = Repository(db_path=tmp_path / "t.db")
+    monkeypatch.setattr(sync_mod, "load_sent_backfill", lambda: [
+        ("BU0000001", "first", "pickup", "2026-08-18T18:00:00"),
+        ("BU0000002", "first", "platinum", "2026-08-18T18:10:00"),
+    ])
+    sheets = _sheet_with_members(["BU0000001"])           # シートは1件、DBは2件
+    report = sync_analytics(repo, sheets, now=datetime(2026, 8, 23, 12, 0),
+                            with_charts=False, trend_fn=None)
+    repo.close()
+    assert report.members == 2
+    assert WEEKLY_SHEET in sheets.data
+
+
+def test_count_sheet_members_ignores_blank_and_missing_header():
+    from bizreach_scout.analytics.sync import SENT_LOG_HEADER, count_sheet_members
+
+    rows = [["注記"], list(SENT_LOG_HEADER), ["BU1111111"], [""], ["BU2222222"]]
+    assert count_sheet_members(rows) == 2
+    assert count_sheet_members([]) == 0                   # 初回（シート無し）
+    assert count_sheet_members([["無関係"], ["データ"]]) == 0

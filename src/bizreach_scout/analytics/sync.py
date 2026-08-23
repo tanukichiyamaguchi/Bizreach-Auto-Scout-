@@ -130,6 +130,28 @@ def read_manual_entries(rows: list[list[str]]) -> list[tuple[str, bool, str, str
     return out
 
 
+class SheetRegressionError(RuntimeError):
+    """シートの記録数が減る書き換えを検出したときに送出する。
+
+    送信ログ(sent_log)は追記のみで減らないため、シート上の既存件数より少ない
+    データで上書きしようとしている＝状態DBが壊れている、と判断できる。
+    2026-08-19 に空のDBでシートが上書きされ、送信記録が94件まで巻き戻った
+    （実際の送信は700件超）事故の再発防止。
+    """
+
+
+def count_sheet_members(rows: list[list[str]]) -> int:
+    """送信ログシートの既存データ行数（会員番号が入っている行）を数える。"""
+    header_idx = next((i for i, row in enumerate(rows[:5]) if "会員番号" in row), -1)
+    if header_idx < 0:
+        return 0
+    c_member = _find_col(rows[header_idx], "会員番号")
+    if c_member < 0:
+        return 0
+    return sum(1 for row in rows[header_idx + 1:]
+               if c_member < len(row) and row[c_member].strip())
+
+
 def _sent_log_rows(records: list[SentRecord]) -> list[list[object]]:
     from .aggregate import channel_label, education_label, weekday_label
 
@@ -325,11 +347,13 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
                    with_charts: bool = True,
                    trend_fn=None,
                    trend_interval_days: int = 7,
-                   trend_min_sends: int = 10) -> SyncReport:
+                   trend_min_sends: int = 10,
+                   allow_shrink: bool = False) -> SyncReport:
     """分析データを Google Sheets へ同期する（冪等）。
 
     trend_fn: (weekly, monthly, segments) -> str の傾向分析生成関数（None なら更新しない。
     週1回ペースは meta の last_trend_at で制御する）。
+    allow_shrink: シートの記録数が減る書き換えを許可する（既定は拒否）。
     """
     now = now or datetime.now()
     report = SyncReport()
@@ -353,6 +377,20 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
                if (rec := SentRecord.from_row(r)) is not None]
     report.members = len(records)
     report.replied = sum(1 for r in records if r.replied)
+
+    # 3'. 記録数が減る書き換えを拒否する（状態DBの巻き戻りからシートを守る最後の砦）。
+    #     送信ログは追記のみで減らないため、減る＝DBが壊れている。
+    existing_members = count_sheet_members(existing_rows)
+    if not allow_shrink and existing_members and len(records) < existing_members:
+        raise SheetRegressionError(
+            f"シートの送信記録が {existing_members} 件あるのに、DBには "
+            f"{len(records)} 件しかありません（{existing_members - len(records)} 件の減少）。"
+            "状態DBが巻き戻った可能性が高いため、シートの上書きを中止しました。"
+            "過去実行の artifact から復旧してください"
+            "（scout ワークフローを mode=restore-db で実行）。"
+            "復旧できずシートを現状のDBで作り直す場合のみ "
+            "`bizscout analytics sync --allow-shrink` を使ってください。"
+        )
 
     # 4. 各シートを決定的に書き換え（送信ログは 注記行 + ヘッダー + データ）。
     sheets.write_rows(SENT_LOG_SHEET, _sent_log_rows(records))

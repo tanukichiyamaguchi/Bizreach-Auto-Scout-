@@ -297,19 +297,25 @@ def _sheets_client():
 @click.option("--charts/--no-charts", default=True, help="チャートの作成/更新を行うか")
 @click.option("--trend/--no-trend", default=True,
               help="傾向分析（週1回・Claude生成）の更新判定を行うか")
-def analytics_sync(charts: bool, trend: bool) -> None:
+@click.option("--allow-shrink", is_flag=True,
+              help="シートの記録数が減る書き換えを許可する（既定は中止。"
+                   "復旧を諦めて現状のDBで作り直すときだけ使う）")
+def analytics_sync(charts: bool, trend: bool, allow_shrink: bool) -> None:
     """DBの送信・返信データを Google スプレッドシートへ同期する（ブラウザ不要）。"""
-    from .analytics.sync import sync_analytics
+    from .analytics.sync import SheetRegressionError, sync_analytics
     from .analytics.trend import generate_trend_commentary
 
     sheets = _sheets_client()
     repo = Repository()
     try:
         trend_fn = (lambda w, m, s: generate_trend_commentary(w, m, s)) if trend else None
-        report = sync_analytics(repo, sheets, with_charts=charts, trend_fn=trend_fn)
+        report = sync_analytics(repo, sheets, with_charts=charts, trend_fn=trend_fn,
+                                allow_shrink=allow_shrink)
         click.echo(report.summary())
         if report.errors:
             click.echo("警告: " + " / ".join(report.errors))
+    except SheetRegressionError as e:
+        raise SystemExit(f"分析同期を中止しました: {e}") from e
     finally:
         repo.close()
 

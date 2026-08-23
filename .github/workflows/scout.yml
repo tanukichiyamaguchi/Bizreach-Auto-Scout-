@@ -360,7 +360,21 @@ jobs:
         continue-on-error: true
         run: |
           if [ -n "$BIZSCOUT_GSHEET_CREDENTIALS" ] && [ -n "$BIZSCOUT_GSHEET_SPREADSHEET_ID" ]; then
-            bizscout analytics sync
+            # 記録数が減る書き換えは中止される（状態DBの巻き戻りからシートを守る）。
+            # 中止された場合は job summary に出し、見落とさないようにする。
+            if ! bizscout analytics sync 2>&1 | tee sync_out.txt; then
+              if grep -q "分析同期を中止しました" sync_out.txt; then
+                echo "::error::分析同期を中止しました（シートの記録数が減る書き換えを検出）。"
+                {
+                  echo "## ⚠️ 分析同期を中止しました"
+                  echo "シートの送信記録より DB の件数が少ないため、上書きを止めました。"
+                  echo "状態DBが巻き戻った可能性があります。"
+                  echo "**復旧**: scout ワークフローを \`mode=restore-db\` ＋"
+                  echo "\`restore_run_id\`=消失前の実行ID で手動実行してください。"
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              exit 1
+            fi
           else
             echo "Google Sheets 未設定のため分析同期をスキップします（docs/スカウト分析.md 参照）。"
           fi
