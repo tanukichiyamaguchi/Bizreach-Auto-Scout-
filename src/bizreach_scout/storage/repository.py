@@ -102,6 +102,54 @@ def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _row_get(row: sqlite3.Row, col: str, default=None):
+    """スキーマ差分に強い列アクセス（列が無ければ default）。
+
+    sqlite3.Row の `in` は値を走査するため、列の有無は keys() で判定する。
+    """
+    return row[col] if col in set(row.keys()) else default
+
+
+def _is_reconstructed(table: str, row: sqlite3.Row) -> bool:
+    """その行が「実行ログからの復元」で作られたものか（実際の送信記録ではないか）。
+
+    復元行は送信の事実（会員番号・種別・送信枠・時刻）しか持たず、送信時点の
+    候補者プロフィールと件名・本文が空になる。分析のセグメント別集計と、
+    受信箱スキャンの件名照合による返信検知は、これらが揃って初めて機能する。
+    """
+    if table == "sent_log":
+        return bool(_row_get(row, "backfilled", 0))
+    return not (_row_get(row, "subject") or "")
+
+
+def _prefer_snapshot_row(table: str, src: sqlite3.Row, cur: sqlite3.Row) -> bool:
+    """スナップショット側の行で現行行を置き換えるべきかを判定する。
+
+    採用するのは次のいずれか。いずれにも当たらなければ現行を維持する。
+
+    1. 現行が未送信で、スナップショットが送信済み（重複送信防止の是正）
+    2. 現行が復元行で、スナップショットが実際の送信記録
+       （プロフィールと件名が戻る。**送信時刻が同じでも置き換える**。
+       復元表の時刻はログ行の出力時刻で、実際の送信時刻と秒単位で一致し得るため、
+       時刻比較だけに頼ると復元行が実記録を締め出してしまう）
+    3. どちらも実記録で、スナップショットの方が古い（真の初回送信が正）
+    """
+    src_sent = (src["status"] == "sent") if table == "scouts" else True
+    cur_sent = (cur["status"] == "sent") if table == "scouts" else True
+    if not src_sent:
+        return False
+    if not cur_sent:
+        return True
+    src_recon = _is_reconstructed(table, src)
+    cur_recon = _is_reconstructed(table, cur)
+    if cur_recon and not src_recon:
+        return True
+    if src_recon and not cur_recon:
+        return False
+    src_at, cur_at = src["sent_at"], cur["sent_at"]
+    return bool(src_at) and bool(cur_at) and src_at < cur_at
+
+
 class Repository:
     def __init__(self, db_path: str | Path | None = None):
         settings = get_settings()
@@ -546,7 +594,7 @@ class Repository:
                         [r[c] for c in cc])
                     stats["candidates"] += 1
 
-            # scouts / sent_log: 欠けている行を追加。両方送信済みなら古い方が正。
+            # scouts / sent_log: 欠けている行を追加し、既存行は「より良い方」を採る。
             for table, added, replaced in (
                 ("scouts", "scouts", "scouts_earlier"),
                 ("sent_log", "sent_log", "sent_log_earlier"),
@@ -564,14 +612,7 @@ class Repository:
                             [r[c] for c in tc])
                         stats[added] += 1
                         continue
-                    src_sent = (r["status"] == "sent") if table == "scouts" else True
-                    cur_sent = (cur["status"] == "sent") if table == "scouts" else True
-                    src_at, cur_at = r["sent_at"], cur["sent_at"]
-                    take_src = src_sent and (
-                        not cur_sent
-                        or (bool(src_at) and bool(cur_at) and src_at < cur_at)
-                    )
-                    if take_src and non_key:
+                    if _prefer_snapshot_row(table, r, cur) and non_key:
                         sets = ",".join(f"{c}=?" for c in non_key)
                         self.conn.execute(
                             f"UPDATE {table} SET {sets} WHERE member_no=? AND kind=?",

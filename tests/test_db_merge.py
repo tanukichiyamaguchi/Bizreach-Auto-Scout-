@@ -190,3 +190,72 @@ def test_merge_keeps_existing_meta(tmp_path):
     assert repo.get_meta("last_trend_at") == "2026-08-20T00:00:00"
     assert repo.get_meta("only_in_snapshot") == "x"
     repo.close()
+
+
+def test_merge_upgrades_reconstructed_rows_even_at_same_timestamp(tmp_path):
+    """復元表で作った行を、スナップショットの実記録で置き換える。
+
+    実運用の順序（定期実行の restore-state が先に走り、あとから
+    mode=restore-db を実行する）を再現する。復元表の時刻はログ行の出力時刻で、
+    実際の送信時刻と秒単位で一致し得るため、時刻比較だけに頼ると
+    プロフィールと件名が空のまま取り残される。
+    """
+    same_ts = "2026-08-18T18:00:00"
+    snap = Repository(db_path=tmp_path / "snapshot.db")
+    _sent(snap, "BU1111111", subject="【Premium Offer】実際に送った件名")
+    snap.conn.execute("UPDATE sent_log SET sent_at=? WHERE member_no='BU1111111'",
+                      (same_ts,))
+    snap.conn.execute("UPDATE scouts SET sent_at=? WHERE member_no='BU1111111'",
+                      (same_ts,))
+    snap.conn.commit()
+    snap.close()
+
+    # 復元表からの自己修復だけが走った状態（プロフィール・件名が空）。
+    repo = Repository(db_path=tmp_path / "current.db")
+    repo.restore_lost_sends([("BU1111111", "first", "platinum", same_ts)])
+    row = repo.conn.execute(
+        "SELECT * FROM sent_log WHERE member_no='BU1111111'").fetchone()
+    assert row["backfilled"] == 1 and row["age"] is None      # 復元行＝情報が空
+    assert repo.conn.execute(
+        "SELECT subject FROM scouts WHERE member_no='BU1111111' AND kind='first'"
+    ).fetchone()["subject"] == ""
+
+    stats = repo.merge_from_db(tmp_path / "snapshot.db")
+
+    assert stats["sent_log_earlier"] == 1
+    after = repo.conn.execute(
+        "SELECT * FROM sent_log WHERE member_no='BU1111111'").fetchone()
+    assert after["backfilled"] == 0                            # 実記録で置き換わる
+    assert after["age"] == 31                                  # セグメント分析が戻る
+    assert after["current_company"] == "株式会社サンプル商事"
+    # 件名が戻る＝受信箱スキャンの件名照合で返信を再検知できる。
+    assert repo.conn.execute(
+        "SELECT subject FROM scouts WHERE member_no='BU1111111' AND kind='first'"
+    ).fetchone()["subject"] == "【Premium Offer】実際に送った件名"
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"] == 1
+    repo.close()
+
+
+def test_merge_does_not_downgrade_real_record_to_reconstructed(tmp_path):
+    """逆向き（実記録を復元行で潰す）は起こらない。"""
+    same_ts = "2026-08-18T18:00:00"
+    snap = Repository(db_path=tmp_path / "snapshot.db")
+    snap.restore_lost_sends([("BU1111111", "first", "platinum", same_ts)])
+    snap.close()
+
+    repo = Repository(db_path=tmp_path / "current.db")
+    _sent(repo, "BU1111111", subject="【Premium Offer】実際に送った件名")
+    repo.conn.execute("UPDATE sent_log SET sent_at=? WHERE member_no='BU1111111'",
+                      (same_ts,))
+    repo.conn.commit()
+    repo.merge_from_db(tmp_path / "snapshot.db")
+
+    after = repo.conn.execute(
+        "SELECT * FROM sent_log WHERE member_no='BU1111111'").fetchone()
+    assert after["backfilled"] == 0
+    assert after["age"] == 31
+    assert repo.conn.execute(
+        "SELECT subject FROM scouts WHERE member_no='BU1111111' AND kind='first'"
+    ).fetchone()["subject"] == "【Premium Offer】実際に送った件名"
+    repo.close()
