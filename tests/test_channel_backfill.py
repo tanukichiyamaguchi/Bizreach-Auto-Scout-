@@ -93,7 +93,11 @@ def test_load_sent_backfill_missing_or_broken(tmp_path):
 
 
 def test_shipped_sent_backfill_is_consistent():
-    """出荷中の復元表: 56件・(会員番号,種別)一意・妥当な値のみ。"""
+    """出荷中の復元表: 全初回送信を収録し、(会員番号,種別)が一意で妥当な値のみ。
+
+    この表は「キャッシュが全損してもここから送信履歴を再構築できる」ことを
+    担保するもの。実行ログの「初回送信完了」行から抽出した事実だけを持つ。
+    """
     from bizreach_scout.analytics.channel_backfill import (
         load_sent_backfill,
         sent_backfill_path,
@@ -101,8 +105,22 @@ def test_shipped_sent_backfill_is_consistent():
 
     assert sent_backfill_path().exists()
     entries = load_sent_backfill()
-    assert len(entries) == 56
+    # 2026-08-23 時点で553件。運用が続けば増えるため下限で確認する。
+    assert len(entries) >= 553
     keys = [(m, k) for m, k, _, _ in entries]
     assert len(keys) == len(set(keys))
+    assert all(k == "first" for _, k, _, _ in entries)
     assert all(c in ("platinum", "pickup") for _, _, c, _ in entries)
-    assert all(s.startswith("2026-07-") for _, _, _, s in entries)
+    assert all(s.startswith("2026-") for _, _, _, s in entries)
+
+
+def test_shipped_sent_backfill_member_numbers_are_canonical():
+    """会員番号は正準形（ゼロ埋めなし）で収録されていること。
+
+    表記ゆれが混じると同じ人を別人として復元し、重複送信防止が効かない。
+    """
+    from bizreach_scout.analytics.channel_backfill import load_sent_backfill
+    from bizreach_scout.models import normalize_member_no
+
+    entries = load_sent_backfill()
+    assert [m for m, _, _, _ in entries if normalize_member_no(m) != m] == []
