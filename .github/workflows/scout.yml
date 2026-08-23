@@ -24,11 +24,16 @@ on:
         type: string
         default: "30"
       mode:
-        description: "実行モード（scout / pickup / analytics=Sheets同期のみ / sync-replies=返信検知のみ / probe-replies=返信API偵察 / ほかprobe系）"
+        description: "実行モード（scout / pickup / analytics=Sheets同期のみ / sync-replies=返信検知のみ / restore-db=過去実行のartifactからDB復旧 / probe-replies=返信API偵察 / ほかprobe系）"
         type: choice
-        options: ["scout", "pickup", "analytics", "sync-replies", "probe-replies",
-                  "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
+        options: ["scout", "pickup", "analytics", "sync-replies", "restore-db",
+                  "probe-replies", "test-pickup-send", "probe-send", "test-send",
+                  "probe-pickup"]
         default: "scout"
+      restore_run_id:
+        description: "mode=restore-db のとき必須: 復旧元の実行の run ID（その実行の artifact 内 data/bizscout.db を取り込む）"
+        type: string
+        default: ""
   schedule:
     # GitHub の schedule は毎時00分が最も混雑し、数時間の遅延やドロップが起こり得る。
     # そのため 00分を避けた分に設定し（主実行）、さらに予備の時刻を1本用意して
@@ -47,6 +52,8 @@ concurrency:
 
 permissions:
   contents: read
+  # mode=restore-db が過去実行の artifact（DBスナップショット）を取得するために必要。
+  actions: read
 
 jobs:
   scout:
@@ -155,6 +162,35 @@ jobs:
           else
             echo "セッション secret 未設定。cache のセッション、または email/password ログインに依存します。"
           fi
+
+      # --- DB復旧（mode=restore-db）---
+      # 過去実行の artifact（bizscout-logs-<run_id> 内の data/bizscout.db）を取得し、
+      # 欠けている記録だけを現行DBへ取り込む（現行の記録は上書きしない・冪等）。
+      # キャッシュ消失で巻き戻った送信・返信・件名・プロフィールを丸ごと戻せる。
+      # 例: 2026-08-19 の巻き戻りは run 32124592882（8/18 実行）から復旧する。
+      - name: Download DB snapshot (mode=restore-db)
+        if: env.RUN_MODE == 'restore-db'
+        uses: actions/download-artifact@v4
+        with:
+          name: bizscout-logs-${{ inputs.restore_run_id }}
+          run-id: ${{ inputs.restore_run_id }}
+          github-token: ${{ github.token }}
+          path: restore_tmp
+
+      - name: Merge DB snapshot (mode=restore-db)
+        if: env.RUN_MODE == 'restore-db'
+        run: |
+          if [ -z "${{ inputs.restore_run_id }}" ]; then
+            echo "::error::restore_run_id が未指定です。復旧元の run ID を指定してください。"
+            exit 1
+          fi
+          SNAP="$(find restore_tmp -name 'bizscout.db' | head -1)"
+          if [ -z "$SNAP" ]; then
+            echo "::error::artifact に data/bizscout.db が見つかりません。"
+            exit 1
+          fi
+          echo "復旧元スナップショット: $SNAP"
+          bizscout merge-db --from "$SNAP"
 
       # 送信記録の自己修復。actions/cache が消えていても、実行ログ由来の復元表
       # （config/sent_backfill.json）から送信履歴（重複送信防止・分析の分母）を

@@ -504,6 +504,111 @@ class Repository:
             self.conn.commit()
         return filled
 
+    def merge_from_db(self, other_path: str | Path) -> dict[str, int]:
+        """別のDBスナップショット（例: 実行 artifact の data/bizscout.db）から
+        現行DBに欠けている記録を取り込む（冪等）。
+
+        キャッシュ消失で状態が巻き戻った後の復旧用。取り込みは「欠けている行の
+        追加」が基本で、現行の行は上書きしない。例外は2つだけ:
+
+        - scouts / sent_log: 両方に「送信済み」があり、スナップショット側の
+          sent_at がより古い場合はそちらへ差し替える（真の初回送信が正。
+          巻き戻り中の再送信で同じ人に新しい行ができた場合に日付を正しく戻す）。
+        - replies: 現行が未返信でスナップショットが返信ありなら昇格する
+          （upsert_reply と同じ「返信ありを取り消さない」方針）。
+
+        スキーマ差分（列の追加・削除）には共通列のみで対応する。
+        テーブルごとの取り込み・差し替え件数を返す。
+        """
+        other = sqlite3.connect(str(other_path))
+        other.row_factory = sqlite3.Row
+        stats = {"candidates": 0, "scouts": 0, "scouts_earlier": 0,
+                 "sent_log": 0, "sent_log_earlier": 0, "replies": 0, "meta": 0}
+
+        def cols(conn: sqlite3.Connection, table: str) -> list[str]:
+            return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+
+        def shared_cols(table: str, drop: tuple[str, ...] = ()) -> list[str]:
+            mine = set(cols(self.conn, table))
+            return [c for c in cols(other, table) if c in mine and c not in drop]
+
+        try:
+            # candidates: 欠けている候補者プロフィールのみ追加。
+            cc = shared_cols("candidates")
+            for r in other.execute("SELECT * FROM candidates"):
+                cur = self.conn.execute(
+                    "SELECT 1 FROM candidates WHERE member_no=?",
+                    (r["member_no"],)).fetchone()
+                if cur is None:
+                    self.conn.execute(
+                        f"INSERT INTO candidates ({','.join(cc)}) "
+                        f"VALUES ({','.join('?' * len(cc))})",
+                        [r[c] for c in cc])
+                    stats["candidates"] += 1
+
+            # scouts / sent_log: 欠けている行を追加。両方送信済みなら古い方が正。
+            for table, added, replaced in (
+                ("scouts", "scouts", "scouts_earlier"),
+                ("sent_log", "sent_log", "sent_log_earlier"),
+            ):
+                tc = shared_cols(table, drop=("id",))
+                non_key = [c for c in tc if c not in ("member_no", "kind")]
+                for r in other.execute(f"SELECT * FROM {table}"):
+                    cur = self.conn.execute(
+                        f"SELECT * FROM {table} WHERE member_no=? AND kind=?",
+                        (r["member_no"], r["kind"])).fetchone()
+                    if cur is None:
+                        self.conn.execute(
+                            f"INSERT INTO {table} ({','.join(tc)}) "
+                            f"VALUES ({','.join('?' * len(tc))})",
+                            [r[c] for c in tc])
+                        stats[added] += 1
+                        continue
+                    src_sent = (r["status"] == "sent") if table == "scouts" else True
+                    cur_sent = (cur["status"] == "sent") if table == "scouts" else True
+                    src_at, cur_at = r["sent_at"], cur["sent_at"]
+                    take_src = src_sent and (
+                        not cur_sent
+                        or (bool(src_at) and bool(cur_at) and src_at < cur_at)
+                    )
+                    if take_src and non_key:
+                        sets = ",".join(f"{c}=?" for c in non_key)
+                        self.conn.execute(
+                            f"UPDATE {table} SET {sets} WHERE member_no=? AND kind=?",
+                            [r[c] for c in non_key] + [r["member_no"], r["kind"]])
+                        stats[replaced] += 1
+
+            # replies: 欠けていれば追加、未返信→返信ありは昇格（逆方向は触らない）。
+            rc = shared_cols("replies")
+            for r in other.execute("SELECT * FROM replies"):
+                cur = self.conn.execute(
+                    "SELECT replied FROM replies WHERE member_no=?",
+                    (r["member_no"],)).fetchone()
+                if cur is None:
+                    self.conn.execute(
+                        f"INSERT INTO replies ({','.join(rc)}) "
+                        f"VALUES ({','.join('?' * len(rc))})",
+                        [r[c] for c in rc])
+                    stats["replies"] += 1
+                elif not cur["replied"] and r["replied"]:
+                    non_key = [c for c in rc if c != "member_no"]
+                    sets = ",".join(f"{c}=?" for c in non_key)
+                    self.conn.execute(
+                        f"UPDATE replies SET {sets} WHERE member_no=?",
+                        [r[c] for c in non_key] + [r["member_no"]])
+                    stats["replies"] += 1
+
+            # meta: 現行に無いキーのみ（last_trend_at 等。現行が常に優先）。
+            for r in other.execute("SELECT key, value FROM meta"):
+                cur = self.conn.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                    (r["key"], r["value"]))
+                stats["meta"] += cur.rowcount
+            self.conn.commit()
+        finally:
+            other.close()
+        return stats
+
     def analytics_rows(self) -> list[sqlite3.Row]:
         """分析用: 会員単位に first/resend をピボットし replies を LEFT JOIN した行。
 

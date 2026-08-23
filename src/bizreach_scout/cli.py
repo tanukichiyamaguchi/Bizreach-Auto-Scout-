@@ -607,6 +607,39 @@ def doctor() -> None:
     raise SystemExit(0 if overall_ok(checks) else 1)
 
 
+@cli.command(name="merge-db")
+@click.option("--from", "from_path", required=True, type=click.Path(exists=True),
+              help="取り込み元のDBスナップショット（例: 実行 artifact の data/bizscout.db）")
+def merge_db(from_path: str) -> None:
+    """DBスナップショットから欠けている記録を現行DBへ取り込む（冪等）。
+
+    キャッシュ消失で状態が巻き戻った後の復旧用。現行の記録は上書きせず、
+    欠けている行の追加（＋初回送信はより古い記録を正とする差し替え、
+    返信は「未返信→返信あり」の昇格のみ）を行う。
+    """
+    from .storage.repository import Repository
+
+    repo = Repository()
+    try:
+        stats = repo.merge_from_db(from_path)
+        total = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM sent_log WHERE kind='first'"
+        ).fetchone()["n"]
+        replied = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM replies WHERE replied=1"
+        ).fetchone()["n"]
+    finally:
+        repo.conn.close()
+    click.echo(
+        "DBマージ完了: "
+        f"候補者+{stats['candidates']} / スカウト+{stats['scouts']}"
+        f"（初回日付の是正{stats['scouts_earlier']}） / "
+        f"送信ログ+{stats['sent_log']}（是正{stats['sent_log_earlier']}） / "
+        f"返信+{stats['replies']} / メタ+{stats['meta']} / "
+        f"初回送信 計{total}件・返信あり 計{replied}件"
+    )
+
+
 @cli.command(name="restore-state")
 def restore_state() -> None:
     """送信記録の自己修復（冪等）。
