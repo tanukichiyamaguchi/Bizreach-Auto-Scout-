@@ -156,12 +156,25 @@ jobs:
             echo "セッション secret 未設定。cache のセッション、または email/password ログインに依存します。"
           fi
 
+      # 送信記録の自己修復。actions/cache が消えていても、実行ログ由来の復元表
+      # （config/sent_backfill.json）から送信履歴（重複送信防止・分析の分母）を
+      # 再構築する。doctor の送信履歴チェックより前に行う（復元しても空のままの
+      # 時だけ doctor が fail して実行を止める）。
+      - name: Restore send history (self-heal)
+        run: bizscout restore-state
+
       # 起動前チェックは送信のゲートにする。fail（APIキー未設定・設定のタイポ・
-      # 認証情報欠落・DB書き込み不可・playwright未導入など）が1件でもあれば
-      # 後続の送信ステップを実行しない。warn は許容される。
+      # 認証情報欠落・DB書き込み不可・playwright未導入・送信履歴の消失など）が
+      # 1件でもあれば後続の送信ステップを実行しない。warn は許容される。
       # 以前は continue-on-error: true で「点検が失敗しても送信が続く」状態だった。
       - name: Preflight (doctor)
         run: bizscout doctor
+
+      # 状態の保存は doctor 通過後にだけ許可する。キャッシュ消失などで点検に失敗した
+      # 実行が空の data/ を「最新の保存」としてキャッシュへ書き込み、正常なキャッシュを
+      # 覆い隠す事故を防ぐ（2026-08-17 に発生。復元表に無い送信記録がシートから消えた）。
+      - name: Allow state saves
+        run: echo "STATE_OK=true" >> "$GITHUB_ENV"
 
       # 本日のピックアップ（無料枠・本命）。求人ベース＋候補者ベースの両セクションを処理。
       # 本命なので先に実行し、失敗しても検索スカウトは続行させる（continue-on-error）。
@@ -183,7 +196,7 @@ jobs:
       # 【重要】送信直後に状態を保存する。後段（検索スカウト・返信検知・分析）で
       # タイムアウトやキャンセルが起きても、ここまでの送信記録は失われない。
       - name: Save state after pickup (data/)
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         uses: actions/cache/save@v4
         with:
           path: data
@@ -217,7 +230,7 @@ jobs:
 
       # 【重要】検索スカウト＋再送の直後にも状態を保存（送信記録の消失防止）。
       - name: Save state after scout (data/)
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         uses: actions/cache/save@v4
         with:
           path: data
@@ -304,8 +317,10 @@ jobs:
           fi
 
       # 送信・返信データを Google スプレッドシートへ同期（設定済みの場合のみ）。
+      # STATE_OK 条件: doctor が fail した実行（＝状態が壊れている疑い）から
+      # シートを書き換えない（巻き戻った数値での上書きを防ぐ）。
       - name: Sync analytics to Google Sheets
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         continue-on-error: true
         run: |
           if [ -n "$BIZSCOUT_GSHEET_CREDENTIALS" ] && [ -n "$BIZSCOUT_GSHEET_SPREADSHEET_ID" ]; then
@@ -321,7 +336,7 @@ jobs:
       # 実行末尾の保存（返信チェック時刻・分析メタ等を含む最終状態）。
       # restore-keys は最新の保存を選ぶため、このキーが最優先で復元される。
       - name: Save state (data/)
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         uses: actions/cache/save@v4
         with:
           path: data

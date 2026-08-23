@@ -185,6 +185,45 @@ def _check_safety_limits() -> Check:
     return Check("送信の安全弁", status, detail)
 
 
+def _check_sent_history() -> Check:
+    """送信履歴（状態DB）の存在を点検する。
+
+    expect_state=true の本番運用で送信履歴が空なら、キャッシュ消失で状態DBが
+    巻き戻った可能性が高い。従来この状態でも doctor は通過し、実行末尾の保存が
+    空の data/ を「最新の保存」としてキャッシュへ書き込み、正常なキャッシュを
+    覆い隠していた（2026-08 に発生。復元表に無い送信記録約300件がシートから消えた）。
+    fail にして送信も保存も止める（復元は doctor より前の restore-state が担う。
+    ここで fail になるのは復元表からの自己修復すら効かなかった時だけ）。
+    """
+    s = get_settings()
+    try:
+        from .storage.repository import Repository
+
+        repo = Repository()
+        try:
+            present = repo.has_any_sent()
+        finally:
+            repo.conn.close()
+    except Exception as exc:
+        return Check("送信履歴(状態DB)", "fail", f"送信履歴を確認できません: {exc}")
+    if present:
+        return Check("送信履歴(状態DB)", "ok", "送信履歴が存在します。")
+    if not s.expect_state:
+        return Check("送信履歴(状態DB)", "ok",
+                     "送信履歴は空です（expect_state=false のため初回運用として許容）。")
+    if s.dry_run:
+        return Check("送信履歴(状態DB)", "warn",
+                     "送信履歴が空です（dry_run のため続行しますが、キャッシュ消失の可能性を確認してください）。")
+    return Check(
+        "送信履歴(状態DB)",
+        "fail",
+        "BIZSCOUT_EXPECT_STATE=true ですが送信履歴(状態DB)が空です。"
+        "actions/cache 失効などで状態が消えた可能性があります。重複送信と"
+        "「空の状態での上書き保存」を防ぐため中断します。復旧手順は "
+        "docs/GitHub Actionsで運用.md を参照してください。",
+    )
+
+
 def _check_playwright() -> Check:
     """playwright が import 可能かを点検する。"""
     try:
@@ -295,6 +334,7 @@ _CHECK_FUNCS = (
     _check_kill_switch,
     _check_dry_run,
     _check_safety_limits,
+    _check_sent_history,
     _check_playwright,
     _check_chromium,
     _check_storage_state_dir,

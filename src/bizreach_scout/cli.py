@@ -607,6 +607,33 @@ def doctor() -> None:
     raise SystemExit(0 if overall_ok(checks) else 1)
 
 
+@cli.command(name="restore-state")
+def restore_state() -> None:
+    """送信記録の自己修復（冪等）。
+
+    実行ログ由来の復元表（config/sent_backfill.json）と scouts テーブルから、
+    送信履歴（scouts / sent_log）を再構築する。actions/cache の消失で状態DBが
+    巻き戻っても、ここで復元してから doctor の送信履歴チェックに進む運用にする。
+    分析同期(analytics sync)でも同じ処理が走るため、何度実行しても安全。
+    """
+    from .analytics.sync import self_heal_state
+    from .storage.repository import Repository
+
+    repo = Repository()
+    try:
+        healed = self_heal_state(repo)
+        total = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM sent_log WHERE kind='first'"
+        ).fetchone()["n"]
+    finally:
+        repo.conn.close()
+    click.echo(
+        f"送信記録の自己修復: backfill+{healed['backfilled']} / "
+        f"消失復元+{healed['lost_restored']} / 送信枠復元+{healed['channels_filled']} / "
+        f"初回送信の記録 計{total}件"
+    )
+
+
 @cli.command()
 @click.option("--search-url", help="bizreach の検索結果URL（保存検索）。未指定なら再送のみ")
 @click.option("--interval", default=86400, help="サイクル間隔（秒）。既定は1日(86400)")

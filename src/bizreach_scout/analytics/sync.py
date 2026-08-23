@@ -72,6 +72,26 @@ class SyncReport:
                 f"チャート{self.charts}件 / 傾向分析更新={self.trend_refreshed}")
 
 
+def self_heal_state(repo: Repository) -> dict[str, int]:
+    """送信記録の自己修復（冪等）。分析同期と起動前の復元の両方から使う。
+
+    actions/cache の消失・巻き戻りで状態DBが空になっても、実行ログ由来の復元表
+    （config/sent_backfill.json）と scouts テーブルから送信履歴を再構築する。
+    2026-08 に空の状態が「最新の保存」としてキャッシュを上書きし、送信記録が
+    56件まで巻き戻った事故への恒久対処。復元表が全送信を収録している限り、
+    どの時点の全損からでも送信履歴（重複送信防止・分析の分母）が復元される。
+    """
+    return {
+        # 送信済み scouts から sent_log を補完（キャッシュ消失・過去分の自己修復）。
+        "backfilled": repo.backfill_sent_log(),
+        # 実行ログ由来の復元表から scouts / sent_log の両方を復元。
+        "lost_restored": repo.restore_lost_sends(load_sent_backfill()),
+        # 送信枠を記録する前の過去分に、実行ログから復元した送信枠を埋める
+        # （復元された行も対象にするため、上の2つの後に行う）。
+        "channels_filled": repo.backfill_channels(load_channel_backfill()),
+    }
+
+
 def _fmt_dt(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
 
@@ -314,14 +334,11 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
     now = now or datetime.now()
     report = SyncReport()
 
-    # 1. sent_log を自己修復（キャッシュ消失・過去分の補完。冪等）。
-    report.backfilled = repo.backfill_sent_log()
-    # 1'. キャッシュ未保存で消えた送信記録を実行ログ由来の復元表から戻す（冪等）。
-    #     scouts(重複送信防止) と sent_log(分析の分母) の両方に効く。
-    report.lost_restored = repo.restore_lost_sends(load_sent_backfill())
-    # 1''. 送信枠を記録する前の過去分に、実行ログから復元した送信枠を埋める（冪等）。
-    #      backfill 群の後に行う（復元された行も対象にするため）。
-    report.channels_filled = repo.backfill_channels(load_channel_backfill())
+    # 1. 送信記録の自己修復（キャッシュ消失・過去分の補完。冪等）。
+    healed = self_heal_state(repo)
+    report.backfilled = healed["backfilled"]
+    report.lost_restored = healed["lost_restored"]
+    report.channels_filled = healed["channels_filled"]
 
     # 2. シートの手動チェックを読み戻して DB へマージ（書き換え前に必ず行う）。
     try:
