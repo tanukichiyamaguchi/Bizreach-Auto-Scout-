@@ -135,11 +135,13 @@ matching:
   # 紹介対象から除外するコンサルタントID。
   # - iwabuchi: 署名者（代表取締役社長・岩渕龍正）はメールの差出人本人であり、
   #   第三者として紹介するのは不自然なため除外。
-  # - yamamoto: 山本はスカウト文面に掲載しない（2026-08-02 の運用指示）。
-  exclude_consultant_ids: [iwabuchi, yamamoto]
+  # 在籍していない人はここに書くのではなく consultants.json から削除すること。
+  # 除外リストは「在籍しているが紹介しない人」のためのもので、退職者を残しておくと
+  # 氏名は出ないのに出身企業などの属性が訴求に残る事故につながる。
+  exclude_consultant_ids: [iwabuchi]
   # ID の保険。import-consultants は consultants.json を再生成して id を振り直すため、
   # 氏名（部分一致）でも除外できるようにする。
-  exclude_consultant_names: [岩渕, 山本]
+  exclude_consultant_names: [岩渕]
   # 「職種・役割の共通点」の根拠にしない語。consultants.json の roles には役職名が
   # 混ざっており、候補者の役職（現職の positionName）と一致して『職種の共通点』に
   # なってしまうため除外する（役職が同じでも職種が同じとは限らない）。

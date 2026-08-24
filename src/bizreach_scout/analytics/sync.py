@@ -72,6 +72,26 @@ class SyncReport:
                 f"チャート{self.charts}件 / 傾向分析更新={self.trend_refreshed}")
 
 
+def self_heal_state(repo: Repository) -> dict[str, int]:
+    """送信記録の自己修復（冪等）。分析同期と起動前の復元の両方から使う。
+
+    actions/cache の消失・巻き戻りで状態DBが空になっても、実行ログ由来の復元表
+    （config/sent_backfill.json）と scouts テーブルから送信履歴を再構築する。
+    2026-08 に空の状態が「最新の保存」としてキャッシュを上書きし、送信記録が
+    56件まで巻き戻った事故への恒久対処。復元表が全送信を収録している限り、
+    どの時点の全損からでも送信履歴（重複送信防止・分析の分母）が復元される。
+    """
+    return {
+        # 送信済み scouts から sent_log を補完（キャッシュ消失・過去分の自己修復）。
+        "backfilled": repo.backfill_sent_log(),
+        # 実行ログ由来の復元表から scouts / sent_log の両方を復元。
+        "lost_restored": repo.restore_lost_sends(load_sent_backfill()),
+        # 送信枠を記録する前の過去分に、実行ログから復元した送信枠を埋める
+        # （復元された行も対象にするため、上の2つの後に行う）。
+        "channels_filled": repo.backfill_channels(load_channel_backfill()),
+    }
+
+
 def _fmt_dt(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
 
@@ -108,6 +128,28 @@ def read_manual_entries(rows: list[list[str]]) -> list[tuple[str, bool, str, str
         if checked:
             out.append((member, True, "", "手動"))
     return out
+
+
+class SheetRegressionError(RuntimeError):
+    """シートの記録数が減る書き換えを検出したときに送出する。
+
+    送信ログ(sent_log)は追記のみで減らないため、シート上の既存件数より少ない
+    データで上書きしようとしている＝状態DBが壊れている、と判断できる。
+    2026-08-19 に空のDBでシートが上書きされ、送信記録が94件まで巻き戻った
+    （実際の送信は700件超）事故の再発防止。
+    """
+
+
+def count_sheet_members(rows: list[list[str]]) -> int:
+    """送信ログシートの既存データ行数（会員番号が入っている行）を数える。"""
+    header_idx = next((i for i, row in enumerate(rows[:5]) if "会員番号" in row), -1)
+    if header_idx < 0:
+        return 0
+    c_member = _find_col(rows[header_idx], "会員番号")
+    if c_member < 0:
+        return 0
+    return sum(1 for row in rows[header_idx + 1:]
+               if c_member < len(row) and row[c_member].strip())
 
 
 def _sent_log_rows(records: list[SentRecord]) -> list[list[object]]:
@@ -305,23 +347,22 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
                    with_charts: bool = True,
                    trend_fn=None,
                    trend_interval_days: int = 7,
-                   trend_min_sends: int = 10) -> SyncReport:
+                   trend_min_sends: int = 10,
+                   allow_shrink: bool = False) -> SyncReport:
     """分析データを Google Sheets へ同期する（冪等）。
 
     trend_fn: (weekly, monthly, segments) -> str の傾向分析生成関数（None なら更新しない。
     週1回ペースは meta の last_trend_at で制御する）。
+    allow_shrink: シートの記録数が減る書き換えを許可する（既定は拒否）。
     """
     now = now or datetime.now()
     report = SyncReport()
 
-    # 1. sent_log を自己修復（キャッシュ消失・過去分の補完。冪等）。
-    report.backfilled = repo.backfill_sent_log()
-    # 1'. キャッシュ未保存で消えた送信記録を実行ログ由来の復元表から戻す（冪等）。
-    #     scouts(重複送信防止) と sent_log(分析の分母) の両方に効く。
-    report.lost_restored = repo.restore_lost_sends(load_sent_backfill())
-    # 1''. 送信枠を記録する前の過去分に、実行ログから復元した送信枠を埋める（冪等）。
-    #      backfill 群の後に行う（復元された行も対象にするため）。
-    report.channels_filled = repo.backfill_channels(load_channel_backfill())
+    # 1. 送信記録の自己修復（キャッシュ消失・過去分の補完。冪等）。
+    healed = self_heal_state(repo)
+    report.backfilled = healed["backfilled"]
+    report.lost_restored = healed["lost_restored"]
+    report.channels_filled = healed["channels_filled"]
 
     # 2. シートの手動チェックを読み戻して DB へマージ（書き換え前に必ず行う）。
     try:
@@ -336,6 +377,20 @@ def sync_analytics(repo: Repository, sheets: SheetsPort, *,
                if (rec := SentRecord.from_row(r)) is not None]
     report.members = len(records)
     report.replied = sum(1 for r in records if r.replied)
+
+    # 3'. 記録数が減る書き換えを拒否する（状態DBの巻き戻りからシートを守る最後の砦）。
+    #     送信ログは追記のみで減らないため、減る＝DBが壊れている。
+    existing_members = count_sheet_members(existing_rows)
+    if not allow_shrink and existing_members and len(records) < existing_members:
+        raise SheetRegressionError(
+            f"シートの送信記録が {existing_members} 件あるのに、DBには "
+            f"{len(records)} 件しかありません（{existing_members - len(records)} 件の減少）。"
+            "状態DBが巻き戻った可能性が高いため、シートの上書きを中止しました。"
+            "過去実行の artifact から復旧してください"
+            "（scout ワークフローを mode=restore-db で実行）。"
+            "復旧できずシートを現状のDBで作り直す場合のみ "
+            "`bizscout analytics sync --allow-shrink` を使ってください。"
+        )
 
     # 4. 各シートを決定的に書き換え（送信ログは 注記行 + ヘッダー + データ）。
     sheets.write_rows(SENT_LOG_SHEET, _sent_log_rows(records))

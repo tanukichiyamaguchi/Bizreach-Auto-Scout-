@@ -91,13 +91,13 @@
     },
     {
       "id": "c008",
-      "display_name": "H.M（プルデンシャル生命出身コンサルタント）",
-      "former_companies": ["プルデンシャル生命"],
+      "display_name": "H.M（生命保険出身コンサルタント）",
+      "former_companies": ["サンプル生命保険"],
       "industries": ["保険", "生命保険"],
       "universities": ["上智大学"],
-      "roles": ["ライフプランナー", "営業"],
-      "specialties": ["無形商材営業", "顧客信頼構築"],
-      "profile_url": "https://www.consuldent.jp/recruitment/2020/04/3272/",
+      "roles": ["保険営業", "営業"],
+      "specialties": ["個人向け提案営業", "長期フォロー"],
+      "profile_url": "https://www.consuldent.jp/members.html#c008",
       "tags": ["insurance"]
     },
     {

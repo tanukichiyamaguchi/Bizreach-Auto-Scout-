@@ -297,19 +297,25 @@ def _sheets_client():
 @click.option("--charts/--no-charts", default=True, help="チャートの作成/更新を行うか")
 @click.option("--trend/--no-trend", default=True,
               help="傾向分析（週1回・Claude生成）の更新判定を行うか")
-def analytics_sync(charts: bool, trend: bool) -> None:
+@click.option("--allow-shrink", is_flag=True,
+              help="シートの記録数が減る書き換えを許可する（既定は中止。"
+                   "復旧を諦めて現状のDBで作り直すときだけ使う）")
+def analytics_sync(charts: bool, trend: bool, allow_shrink: bool) -> None:
     """DBの送信・返信データを Google スプレッドシートへ同期する（ブラウザ不要）。"""
-    from .analytics.sync import sync_analytics
+    from .analytics.sync import SheetRegressionError, sync_analytics
     from .analytics.trend import generate_trend_commentary
 
     sheets = _sheets_client()
     repo = Repository()
     try:
         trend_fn = (lambda w, m, s: generate_trend_commentary(w, m, s)) if trend else None
-        report = sync_analytics(repo, sheets, with_charts=charts, trend_fn=trend_fn)
+        report = sync_analytics(repo, sheets, with_charts=charts, trend_fn=trend_fn,
+                                allow_shrink=allow_shrink)
         click.echo(report.summary())
         if report.errors:
             click.echo("警告: " + " / ".join(report.errors))
+    except SheetRegressionError as e:
+        raise SystemExit(f"分析同期を中止しました: {e}") from e
     finally:
         repo.close()
 
@@ -605,6 +611,66 @@ def doctor() -> None:
     checks = run_checks()
     click.echo(format_report(checks))
     raise SystemExit(0 if overall_ok(checks) else 1)
+
+
+@cli.command(name="merge-db")
+@click.option("--from", "from_path", required=True, type=click.Path(exists=True),
+              help="取り込み元のDBスナップショット（例: 実行 artifact の data/bizscout.db）")
+def merge_db(from_path: str) -> None:
+    """DBスナップショットから欠けている記録を現行DBへ取り込む（冪等）。
+
+    キャッシュ消失で状態が巻き戻った後の復旧用。現行の記録は上書きせず、
+    欠けている行の追加（＋初回送信はより古い記録を正とする差し替え、
+    返信は「未返信→返信あり」の昇格のみ）を行う。
+    """
+    from .storage.repository import Repository
+
+    repo = Repository()
+    try:
+        stats = repo.merge_from_db(from_path)
+        total = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM sent_log WHERE kind='first'"
+        ).fetchone()["n"]
+        replied = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM replies WHERE replied=1"
+        ).fetchone()["n"]
+    finally:
+        repo.conn.close()
+    click.echo(
+        "DBマージ完了: "
+        f"候補者+{stats['candidates']} / スカウト+{stats['scouts']}"
+        f"（初回日付の是正{stats['scouts_earlier']}） / "
+        f"送信ログ+{stats['sent_log']}（是正{stats['sent_log_earlier']}） / "
+        f"返信+{stats['replies']} / メタ+{stats['meta']} / "
+        f"初回送信 計{total}件・返信あり 計{replied}件"
+    )
+
+
+@cli.command(name="restore-state")
+def restore_state() -> None:
+    """送信記録の自己修復（冪等）。
+
+    実行ログ由来の復元表（config/sent_backfill.json）と scouts テーブルから、
+    送信履歴（scouts / sent_log）を再構築する。actions/cache の消失で状態DBが
+    巻き戻っても、ここで復元してから doctor の送信履歴チェックに進む運用にする。
+    分析同期(analytics sync)でも同じ処理が走るため、何度実行しても安全。
+    """
+    from .analytics.sync import self_heal_state
+    from .storage.repository import Repository
+
+    repo = Repository()
+    try:
+        healed = self_heal_state(repo)
+        total = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM sent_log WHERE kind='first'"
+        ).fetchone()["n"]
+    finally:
+        repo.conn.close()
+    click.echo(
+        f"送信記録の自己修復: backfill+{healed['backfilled']} / "
+        f"消失復元+{healed['lost_restored']} / 送信枠復元+{healed['channels_filled']} / "
+        f"初回送信の記録 計{total}件"
+    )
 
 
 @cli.command()

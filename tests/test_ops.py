@@ -142,3 +142,49 @@ def test_safety_limits_is_part_of_doctor():
     from bizreach_scout.ops import _CHECK_FUNCS, _check_safety_limits
 
     assert _check_safety_limits in _CHECK_FUNCS
+
+
+# --- 送信履歴(状態DB)チェック ------------------------------------------------
+
+def _settings_for_state_check(monkeypatch, tmp_path, *, expect_state, dry_run):
+    from bizreach_scout.config import get_settings
+
+    s = get_settings()
+    monkeypatch.setattr(s, "db_path", str(tmp_path / "state.db"))
+    monkeypatch.setattr(s, "expect_state", expect_state)
+    monkeypatch.setattr(s, "dry_run", dry_run)
+    return s
+
+
+def test_sent_history_fail_when_expected_but_empty(monkeypatch, tmp_path):
+    """expect_state=true・本番送信なのに送信履歴が空なら fail（保存も送信も止める）。"""
+    _settings_for_state_check(monkeypatch, tmp_path, expect_state=True, dry_run=False)
+    check = ops._check_sent_history()
+    assert check.status == "fail"
+    assert "空" in check.detail
+
+
+def test_sent_history_ok_when_records_exist(monkeypatch, tmp_path):
+    """送信履歴が1件でもあれば ok。"""
+    from bizreach_scout.storage.repository import Repository
+
+    s = _settings_for_state_check(monkeypatch, tmp_path, expect_state=True, dry_run=False)
+    repo = Repository(db_path=s.db_file)
+    repo.restore_lost_sends([("BU1234567", "first", "platinum", "2026-07-01T10:00:00")])
+    repo.close()
+    check = ops._check_sent_history()
+    assert check.status == "ok"
+
+
+def test_sent_history_ok_when_not_expected(monkeypatch, tmp_path):
+    """expect_state=false（本当の初回運用）は空でも ok。"""
+    _settings_for_state_check(monkeypatch, tmp_path, expect_state=False, dry_run=False)
+    check = ops._check_sent_history()
+    assert check.status == "ok"
+
+
+def test_sent_history_warn_on_dry_run(monkeypatch, tmp_path):
+    """dry_run なら実害が無いため warn に留める（実行は続く）。"""
+    _settings_for_state_check(monkeypatch, tmp_path, expect_state=True, dry_run=True)
+    check = ops._check_sent_history()
+    assert check.status == "warn"

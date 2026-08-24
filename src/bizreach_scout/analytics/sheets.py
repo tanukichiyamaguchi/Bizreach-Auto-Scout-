@@ -62,7 +62,17 @@ class GspreadSheets:
             filename=credentials_path,
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
-        self._ss = self._gc.open_by_key(spreadsheet_id)
+        self._ss = self._open(spreadsheet_id)
+
+    @_retry
+    def _open(self, spreadsheet_id: str):
+        """スプレッドシートを開く（429/5xx はリトライ）。
+
+        接続確立もAPI呼び出しなので、他のメソッドと同じくリトライ対象にする。
+        ここだけリトライが無かったため、2026-08-24 の実行で Google 側の一時的な
+        503 により分析同期が1秒で落ち、シート更新が丸ごとスキップされた。
+        """
+        return self._gc.open_by_key(spreadsheet_id)
 
     def _worksheet(self, title: str, *, create: bool = False):
         import gspread

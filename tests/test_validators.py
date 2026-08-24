@@ -71,3 +71,8 @@ def test_body_over_max_chars_is_flagged():
 
 def test_body_at_max_chars_is_ok():
     assert validate_body("あ" * 3000) == []
+
+
+def test_forbidden_decorative_strings_are_flagged():
+    """禁止文字列（装飾ダッシュ・カギ括弧）が検知されること。"""
+    assert any("禁止表現" in i for i in validate_body("素晴らしい――理想的です。"))

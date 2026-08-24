@@ -24,11 +24,16 @@ on:
         type: string
         default: "30"
       mode:
-        description: "実行モード（scout / pickup / analytics=Sheets同期のみ / sync-replies=返信検知のみ / probe-replies=返信API偵察 / ほかprobe系）"
+        description: "実行モード（scout / pickup / analytics=Sheets同期のみ / sync-replies=返信検知のみ / restore-db=過去実行のartifactからDB復旧 / probe-replies=返信API偵察 / ほかprobe系）"
         type: choice
-        options: ["scout", "pickup", "analytics", "sync-replies", "probe-replies",
-                  "test-pickup-send", "probe-send", "test-send", "probe-pickup"]
+        options: ["scout", "pickup", "analytics", "sync-replies", "restore-db",
+                  "probe-replies", "test-pickup-send", "probe-send", "test-send",
+                  "probe-pickup"]
         default: "scout"
+      restore_run_id:
+        description: "mode=restore-db のとき必須: 復旧元の実行の run ID（その実行の artifact 内 data/bizscout.db を取り込む）"
+        type: string
+        default: ""
   schedule:
     # GitHub の schedule は毎時00分が最も混雑し、数時間の遅延やドロップが起こり得る。
     # そのため 00分を避けた分に設定し（主実行）、さらに予備の時刻を1本用意して
@@ -47,6 +52,8 @@ concurrency:
 
 permissions:
   contents: read
+  # mode=restore-db が過去実行の artifact（DBスナップショット）を取得するために必要。
+  actions: read
 
 jobs:
   scout:
@@ -156,12 +163,54 @@ jobs:
             echo "セッション secret 未設定。cache のセッション、または email/password ログインに依存します。"
           fi
 
+      # --- DB復旧（mode=restore-db）---
+      # 過去実行の artifact（bizscout-logs-<run_id> 内の data/bizscout.db）を取得し、
+      # 欠けている記録だけを現行DBへ取り込む（現行の記録は上書きしない・冪等）。
+      # キャッシュ消失で巻き戻った送信・返信・件名・プロフィールを丸ごと戻せる。
+      # 例: 2026-08-19 の巻き戻りは run 32124592882（8/18 実行）から復旧する。
+      - name: Download DB snapshot (mode=restore-db)
+        if: env.RUN_MODE == 'restore-db'
+        uses: actions/download-artifact@v4
+        with:
+          name: bizscout-logs-${{ inputs.restore_run_id }}
+          run-id: ${{ inputs.restore_run_id }}
+          github-token: ${{ github.token }}
+          path: restore_tmp
+
+      - name: Merge DB snapshot (mode=restore-db)
+        if: env.RUN_MODE == 'restore-db'
+        run: |
+          if [ -z "${{ inputs.restore_run_id }}" ]; then
+            echo "::error::restore_run_id が未指定です。復旧元の run ID を指定してください。"
+            exit 1
+          fi
+          SNAP="$(find restore_tmp -name 'bizscout.db' | head -1)"
+          if [ -z "$SNAP" ]; then
+            echo "::error::artifact に data/bizscout.db が見つかりません。"
+            exit 1
+          fi
+          echo "復旧元スナップショット: $SNAP"
+          bizscout merge-db --from "$SNAP"
+
+      # 送信記録の自己修復。actions/cache が消えていても、実行ログ由来の復元表
+      # （config/sent_backfill.json）から送信履歴（重複送信防止・分析の分母）を
+      # 再構築する。doctor の送信履歴チェックより前に行う（復元しても空のままの
+      # 時だけ doctor が fail して実行を止める）。
+      - name: Restore send history (self-heal)
+        run: bizscout restore-state
+
       # 起動前チェックは送信のゲートにする。fail（APIキー未設定・設定のタイポ・
-      # 認証情報欠落・DB書き込み不可・playwright未導入など）が1件でもあれば
-      # 後続の送信ステップを実行しない。warn は許容される。
+      # 認証情報欠落・DB書き込み不可・playwright未導入・送信履歴の消失など）が
+      # 1件でもあれば後続の送信ステップを実行しない。warn は許容される。
       # 以前は continue-on-error: true で「点検が失敗しても送信が続く」状態だった。
       - name: Preflight (doctor)
         run: bizscout doctor
+
+      # 状態の保存は doctor 通過後にだけ許可する。キャッシュ消失などで点検に失敗した
+      # 実行が空の data/ を「最新の保存」としてキャッシュへ書き込み、正常なキャッシュを
+      # 覆い隠す事故を防ぐ（2026-08-17 に発生。復元表に無い送信記録がシートから消えた）。
+      - name: Allow state saves
+        run: echo "STATE_OK=true" >> "$GITHUB_ENV"
 
       # 本日のピックアップ（無料枠・本命）。求人ベース＋候補者ベースの両セクションを処理。
       # 本命なので先に実行し、失敗しても検索スカウトは続行させる（continue-on-error）。
@@ -183,7 +232,7 @@ jobs:
       # 【重要】送信直後に状態を保存する。後段（検索スカウト・返信検知・分析）で
       # タイムアウトやキャンセルが起きても、ここまでの送信記録は失われない。
       - name: Save state after pickup (data/)
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         uses: actions/cache/save@v4
         with:
           path: data
@@ -217,7 +266,7 @@ jobs:
 
       # 【重要】検索スカウト＋再送の直後にも状態を保存（送信記録の消失防止）。
       - name: Save state after scout (data/)
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         uses: actions/cache/save@v4
         with:
           path: data
@@ -304,12 +353,43 @@ jobs:
           fi
 
       # 送信・返信データを Google スプレッドシートへ同期（設定済みの場合のみ）。
+      # STATE_OK 条件: doctor が fail した実行（＝状態が壊れている疑い）から
+      # シートを書き換えない（巻き戻った数値での上書きを防ぐ）。
       - name: Sync analytics to Google Sheets
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         continue-on-error: true
         run: |
           if [ -n "$BIZSCOUT_GSHEET_CREDENTIALS" ] && [ -n "$BIZSCOUT_GSHEET_SPREADSHEET_ID" ]; then
-            bizscout analytics sync
+            # 記録数が減る書き換えは中止される（状態DBの巻き戻りからシートを守る）。
+            # 失敗時は job summary に出し、見落とさないようにする。
+            # pipefail が無いとパイプの終了ステータスは tee のものになり、
+            # bizscout の失敗を取りこぼす（2026-08-24 の Sheets 503 が無警告で
+            # 素通りした原因）。
+            set -o pipefail
+            if ! bizscout analytics sync 2>&1 | tee sync_out.txt; then
+              if grep -q "分析同期を中止しました" sync_out.txt; then
+                echo "::error::分析同期を中止しました（シートの記録数が減る書き換えを検出）。"
+                {
+                  echo "## ⚠️ 分析同期を中止しました"
+                  echo "シートの送信記録より DB の件数が少ないため、上書きを止めました。"
+                  echo "状態DBが巻き戻った可能性があります。"
+                  echo "**復旧**: scout ワークフローを \`mode=restore-db\` ＋"
+                  echo "\`restore_run_id\`=消失前の実行ID で手動実行してください。"
+                } >> "$GITHUB_STEP_SUMMARY"
+              else
+                # 一時障害（Google の 5xx/429 等）。次回の実行で再同期される。
+                echo "::warning::分析同期に失敗しました。シートは前回の内容のままです。"
+                {
+                  echo "## ⚠️ 分析同期に失敗しました"
+                  echo "シートは前回の内容のまま据え置かれています（送信記録は失われていません）。"
+                  echo "一時的な失敗であれば次回の実行で自動的に再同期されます。"
+                  echo '```'
+                  tail -5 sync_out.txt
+                  echo '```'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              exit 1
+            fi
           else
             echo "Google Sheets 未設定のため分析同期をスキップします（docs/スカウト分析.md 参照）。"
           fi
@@ -321,7 +401,7 @@ jobs:
       # 実行末尾の保存（返信チェック時刻・分析メタ等を含む最終状態）。
       # restore-keys は最新の保存を選ぶため、このキーが最優先で復元される。
       - name: Save state (data/)
-        if: always()
+        if: always() && env.STATE_OK == 'true'
         uses: actions/cache/save@v4
         with:
           path: data
