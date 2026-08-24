@@ -361,7 +361,11 @@ jobs:
         run: |
           if [ -n "$BIZSCOUT_GSHEET_CREDENTIALS" ] && [ -n "$BIZSCOUT_GSHEET_SPREADSHEET_ID" ]; then
             # 記録数が減る書き換えは中止される（状態DBの巻き戻りからシートを守る）。
-            # 中止された場合は job summary に出し、見落とさないようにする。
+            # 失敗時は job summary に出し、見落とさないようにする。
+            # pipefail が無いとパイプの終了ステータスは tee のものになり、
+            # bizscout の失敗を取りこぼす（2026-08-24 の Sheets 503 が無警告で
+            # 素通りした原因）。
+            set -o pipefail
             if ! bizscout analytics sync 2>&1 | tee sync_out.txt; then
               if grep -q "分析同期を中止しました" sync_out.txt; then
                 echo "::error::分析同期を中止しました（シートの記録数が減る書き換えを検出）。"
@@ -371,6 +375,17 @@ jobs:
                   echo "状態DBが巻き戻った可能性があります。"
                   echo "**復旧**: scout ワークフローを \`mode=restore-db\` ＋"
                   echo "\`restore_run_id\`=消失前の実行ID で手動実行してください。"
+                } >> "$GITHUB_STEP_SUMMARY"
+              else
+                # 一時障害（Google の 5xx/429 等）。次回の実行で再同期される。
+                echo "::warning::分析同期に失敗しました。シートは前回の内容のままです。"
+                {
+                  echo "## ⚠️ 分析同期に失敗しました"
+                  echo "シートは前回の内容のまま据え置かれています（送信記録は失われていません）。"
+                  echo "一時的な失敗であれば次回の実行で自動的に再同期されます。"
+                  echo '```'
+                  tail -5 sync_out.txt
+                  echo '```'
                 } >> "$GITHUB_STEP_SUMMARY"
               fi
               exit 1
