@@ -72,11 +72,18 @@ class FakeRepository:
     def __init__(self, *args, **kwargs):
         self.closed = False
         self.reevaluate_calls: list[int] = []
+        self.remembered: list[tuple[str, str]] = []
         FakeRepository.instances.append(self)
 
     def settled_mrccids(self, within_days):
         self.reevaluate_calls.append(within_days)
         return {"BU_ALREADY"}
+
+    def settled_member_nos(self, within_days):
+        return {"BU_ALREADY"}
+
+    def remember_mrccid(self, member_no, mrccid):
+        self.remembered.append((member_no, mrccid))
 
     def close(self):
         self.closed = True

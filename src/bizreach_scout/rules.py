@@ -37,8 +37,11 @@ class EligibilityRules(BaseModel):
     required_gender: str = "male"
     required_education: str = "bachelor"
     exclude_overseas_education: bool = True
+    exclude_japanese_language_school: bool = True
     exclude_non_japanese_native: bool = True
     exclude_english_resume: bool = True
+    exclude_residency_status_mention: bool = True
+    exclude_overseas_residence: bool = True
     # None/未設定なら直近転職チェック無効（"絶対値が入っていれば有効"の従来意味を保つ）。
     min_current_tenure_years: int | None = 1
     job_changes_exclude: list[JobChangeBracket] = Field(default_factory=list)

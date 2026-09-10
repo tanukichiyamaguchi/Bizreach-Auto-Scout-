@@ -87,11 +87,19 @@ def run_cycle(
             # ため、保存検索どうしで結果が重なっても二重取り込みにならない。
             st = get_settings()
             skip_mrccids = repo.settled_mrccids(st.reevaluate_after_days)
-            if skip_mrccids:
+            # mrccid が未知の判定済み候補者（復元した送信記録など）は、レジュメを
+            # 取得して会員番号で弾く。取り込み枠は消費させない。
+            settled_member_nos = repo.settled_member_nos(st.reevaluate_after_days)
+            logger.info(
+                "判定済み（送信済み／直近%d日に対象外）の候補者 %d 名。"
+                "うち mrccid が分かっており検索一覧の時点で除外できるのは %d 件。",
+                st.reevaluate_after_days, len(settled_member_nos), len(skip_mrccids),
+            )
+            if len(skip_mrccids) < len(settled_member_nos):
                 logger.info(
-                    "判定済み（送信済み／直近%d日に対象外）の候補者 %d 件を"
-                    "取り込み対象から除外します。",
-                    st.reevaluate_after_days, len(skip_mrccids),
+                    "残る %d 名はレジュメを取得してから会員番号で読み飛ばし、"
+                    "対応表へ覚えます（次回以降は検索一覧の時点で除外されます）。",
+                    len(settled_member_nos) - len(skip_mrccids),
                 )
             # 送信上限は保存検索ごとではなく1実行の合計。上限に達したら残りの
             # 保存検索は開かない（次回の実行で続きから取り込む）。
@@ -109,6 +117,8 @@ def run_cycle(
                 source = BizreachApiSource(
                     url, max_candidates, client=client,
                     skip_mrccids=skip_mrccids, max_pages=st.ingest_max_pages,
+                    settled_member_nos=settled_member_nos,
+                    on_resolved=repo.remember_mrccid,
                 )
                 # 既送信件数を渡し、複数URLでも1実行あたりの送信上限を守る。
                 report = pipeline.run(source, send=send, sent_offset=sent_so_far)

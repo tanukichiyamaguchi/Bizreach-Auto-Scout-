@@ -156,6 +156,29 @@ def test_japanese_native_english_business_passes():
     assert result.eligible
 
 
+def test_japanese_non_native_in_language_field_fails():
+    # 語学欄で日本語をビジネス会話レベルと申告 → 日本語ネイティブでない（外国人）。
+    result = check_eligibility(make_candidate(languages="英語：ビジネス会話レベル、日本語：ビジネス会話レベル"))
+    assert not result.eligible
+    assert any("日本語を非ネイティブ" in r for r in result.failed)
+
+
+def test_japanese_non_native_reason_listed_alongside_foreign_native():
+    # 該当する根拠は全て列挙する（要確認リストで根拠が分かるように）。
+    result = check_eligibility(make_candidate(languages="日本語：ビジネス会話レベル、北京語：ネイティブレベル"))
+    assert any("日本語を非ネイティブ" in r for r in result.failed)
+    assert any("外国語がネイティブ" in r for r in result.failed)
+
+
+def test_japanese_non_native_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_non_japanese_native": False}}
+    result = check_eligibility(make_candidate(languages="日本語：ビジネス会話レベル"), rules=custom)
+    assert not any("日本語を非ネイティブ" in r for r in result.failed)
+
+
 def test_foreign_native_language_can_be_disabled_via_config():
     from bizreach_scout.config import scout_rules
 
@@ -192,6 +215,63 @@ def test_exclude_english_resume_can_be_disabled_via_config():
     custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_english_resume": False}}
     result = check_eligibility(make_candidate(summary=english, raw_profile=""), rules=custom)
     assert not any("英語" in r and "対象外" in r for r in result.failed)
+
+
+# --- 日本語学校・海外在住・在留資格の自己申告 ----------------------------------
+
+def test_japanese_language_school_fails():
+    result = check_eligibility(make_candidate(japanese_language_school=True))
+    assert not result.eligible
+    assert any("日本語学校" in r for r in result.failed)
+
+
+def test_japanese_language_school_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_japanese_language_school": False}}
+    result = check_eligibility(make_candidate(japanese_language_school=True), rules=custom)
+    assert not any("日本語学校" in r for r in result.failed)
+
+
+def test_overseas_residence_fails_with_code_in_reason():
+    result = check_eligibility(make_candidate(residence="O02", overseas_residence=True))
+    assert not result.eligible
+    assert any("居住地が海外（O02）" in r for r in result.failed)
+
+
+def test_domestic_residence_passes():
+    assert check_eligibility(make_candidate(residence="J13", overseas_residence=False)).eligible
+
+
+def test_overseas_residence_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_overseas_residence": False}}
+    result = check_eligibility(make_candidate(residence="O02", overseas_residence=True), rules=custom)
+    assert not any("居住地が海外" in r for r in result.failed)
+
+
+def test_residency_status_mention_fails():
+    result = check_eligibility(make_candidate(raw_profile="自己PR:\n永住権取得済みで就労制限なし。"))
+    assert not result.eligible
+    assert any("永住権・在留資格・ビザ" in r for r in result.failed)
+
+
+def test_residency_words_about_clients_pass():
+    # 人材業界の日本人が外国人採用支援の経験として書く語は拾わない。
+    result = check_eligibility(make_candidate(summary="外国人材の在留資格申請サポート・特定技能の受け入れ支援を担当。"))
+    assert result.eligible
+
+
+def test_residency_status_mention_can_be_disabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {**rules["eligibility"], "exclude_residency_status_mention": False}}
+    result = check_eligibility(make_candidate(raw_profile="永住権取得済み"), rules=custom)
+    assert not any("永住権・在留資格・ビザ" in r for r in result.failed)
 
 
 def test_unknown_fields_need_confirmation():

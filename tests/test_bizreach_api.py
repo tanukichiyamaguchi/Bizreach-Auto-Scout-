@@ -254,8 +254,89 @@ def test_extract_languages_from_dict_entries():
 
 def test_extract_languages_alternate_keys():
     # 別候補のフィールド名・キー（languageSkills / language / proficiency）でも拾う。
+    # 英語 enum のレベル（Native 等）は画面表記へ写像する。
     r = {"languageSkills": [{"language": {"ja": "中国語"}, "proficiency": "Native"}]}
-    assert _extract_languages(r) == "中国語：Native"
+    assert _extract_languages(r) == "中国語：ネイティブレベル"
+
+
+def test_extract_languages_from_language_code_structure():
+    # 実データ（2026-09-09 実行ログ）の構造: [{"languageCode": "EN", "level": "Basic"}]。
+    # 言語名が無くコードのみ。コードは日本語名へ、レベル enum は画面表記へ写像する。
+    # "None" はレベル未設定（言語名のみ）。
+    r = {"languageSkills": [
+        {"languageCode": "EN", "level": "Basic"},
+        {"languageCode": "JA", "level": "Business"},
+        {"languageCode": "HI", "level": "Native"},
+        {"languageCode": "FR", "level": "None"},
+    ]}
+    assert _extract_languages(r) == "英語：基礎レベル、日本語：ビジネス会話レベル、ヒンディー語：ネイティブレベル、フランス語"
+
+
+def test_extract_languages_unknown_code_kept_verbatim():
+    # 未知の言語コードはそのまま残す（落とさない。ログでマッピング追加のサインにする）。
+    r = {"languageSkills": [{"languageCode": "XX", "level": "Native"}]}
+    assert _extract_languages(r) == "XX：ネイティブレベル"
+
+
+def test_language_code_structure_drives_foreign_detection():
+    # 本番構造の語学欄から「日本語が非ネイティブ」「外国語がネイティブ」を検知できること
+    # （従来はこの構造を抽出できず語学欄の判定が一度も効いていなかった）。
+    resume = _resume()
+    resume["languageSkills"] = [
+        {"languageCode": "EN", "level": "Daily"},
+        {"languageCode": "JA", "level": "Business"},
+        {"languageCode": "ZH", "level": "Native"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.languages == "英語：日常会話レベル、日本語：ビジネス会話レベル、中国語：ネイティブレベル"
+    failed = check_eligibility(c).failed
+    assert any("日本語を非ネイティブ" in r for r in failed)
+    assert any("外国語がネイティブ" in r for r in failed)
+
+
+def test_resume_location_maps_to_residence():
+    # location は国内なら J+都道府県コード（J13=東京都）。それ以外は海外在住。
+    c = resume_to_candidate(_resume(), now=datetime(2026, 7, 1))
+    assert c.residence == "J13" and not c.overseas_residence
+    resume = _resume()
+    resume["location"] = "O05"
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.residence == "O05" and c.overseas_residence
+    assert any("居住地が海外" in r for r in check_eligibility(c).failed)
+    resume["location"] = None
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.residence == "" and not c.overseas_residence  # 不明は海外扱いしない
+
+
+def test_resume_country_tagged_school_is_overseas():
+    # 校名に国名タグ「（中国）」／先頭の国名「イギリス 〜」があれば海外の学校（高校を含む）。
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "北京物資学院（中国）", "en": None}},
+        {"schoolGrade": "HighSchool", "name": {"ja": "北京市第一六一中学（中国）", "en": None}},
+    ]
+    assert resume_to_candidate(resume, now=datetime(2026, 7, 1)).overseas_education
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "イギリス コベントリー大学 ビジネススクール", "en": None}},
+    ]
+    assert resume_to_candidate(resume, now=datetime(2026, 7, 1)).overseas_education
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "中国学園大学", "en": None}},  # 国内（岡山）
+    ]
+    assert not resume_to_candidate(resume, now=datetime(2026, 7, 1)).overseas_education
+
+
+def test_resume_japanese_language_school_flag():
+    resume = _resume()
+    resume["educations"] = [
+        {"schoolGrade": "Bachelors", "name": {"ja": "早稲田大学", "en": None}},
+        {"schoolGrade": "Other", "name": {"ja": "ISIキャリア外語アカデミー高田馬場校", "en": None}},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.japanese_language_school
+    assert any("日本語学校" in r for r in check_eligibility(c).failed)
+    resume["educations"] = [{"schoolGrade": "Bachelors", "name": {"ja": "早稲田大学", "en": None}}]
+    assert not resume_to_candidate(resume, now=datetime(2026, 7, 1)).japanese_language_school
 
 
 def test_extract_languages_string_form_and_absent():

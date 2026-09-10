@@ -93,6 +93,19 @@ CREATE TABLE IF NOT EXISTS replies (
     updated_at TEXT NOT NULL
 );
 
+-- 会員番号 ↔ mrccid の対応。取り込みの読み飛ばし判定に使う。
+-- 検索一覧が返すのは mrccid だけで、会員番号はレジュメを取得して初めて分かる。
+-- candidates には取り込みに成功した候補者しか載らないため、復元表から送信記録だけを
+-- 戻した場合（プロフィール無し）に「送信済みなのに読み飛ばせない」状態が生まれる。
+-- レジュメを取得したら結果に関わらずここへ覚えておき、次回以降の取り込みで確実に
+-- 読み飛ばせるようにする。
+CREATE TABLE IF NOT EXISTS member_mrccid (
+    member_no  TEXT PRIMARY KEY,
+    mrccid     TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_member_mrccid ON member_mrccid(mrccid);
+
 -- 分析まわりのメタ情報（傾向分析の最終生成時刻など）。
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
@@ -448,6 +461,63 @@ class Repository:
         after = self.conn.execute("SELECT COUNT(*) AS n FROM sent_log").fetchone()["n"]
         return after - before
 
+    def remember_mrccid(self, member_no: str, mrccid: str) -> None:
+        """会員番号と mrccid の対応を覚える（レジュメ取得のたびに呼ぶ）。
+
+        対象外で取り込みを打ち切った候補者も含めて覚えることが要点。ここを
+        candidates 任せにすると、送信記録だけを復元した候補者や、取り込み途中で
+        弾いた候補者の mrccid が分からず、毎回同じ人を取り直してしまう。
+        """
+        from ..models import normalize_member_no
+
+        if not member_no or not mrccid:
+            return
+        self.conn.execute(
+            "INSERT INTO member_mrccid (member_no, mrccid, updated_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(member_no) DO UPDATE SET mrccid=excluded.mrccid,"
+            " updated_at=excluded.updated_at",
+            (normalize_member_no(member_no), mrccid, _now_iso()),
+        )
+        self.conn.commit()
+
+    def settled_member_nos(self, within_days: int) -> set[str]:
+        """取り込み時に読み飛ばしてよい候補者の**会員番号**を返す。
+
+        settled_mrccids と判定条件は同じ。mrccid が分からない候補者（復元した
+        送信記録など）も拾えるよう、会員番号でも同じ集合を引けるようにする。
+        """
+        out: set[str] = set()
+        for member_no, _ in self._settled_rows(within_days):
+            out.add(member_no)
+        return out
+
+    def _settled_rows(self, within_days: int) -> list[tuple[str, str]]:
+        """(会員番号, profile_json) の判定済み候補者一覧。
+
+        - **送信済み**: 恒久的に読み飛ばす（candidates に行が無くても対象）。
+        - **直近 within_days 日以内に対象外と判定**: 期限付き。
+        """
+        params: list[str] = []
+        cutoff_clause = ""
+        if within_days > 0:
+            cutoff = (datetime.now() - timedelta(days=within_days)).isoformat(
+                timespec="seconds"
+            )
+            cutoff_clause = (
+                " UNION SELECT c.member_no AS member_no, c.profile_json AS profile_json"
+                " FROM candidates c WHERE c.eligible = 0 AND c.updated_at >= ?"
+            )
+            params.append(cutoff)
+        # 送信済みは scouts を起点にする（candidates に行が無い復元分も拾う）。
+        sql = (
+            "SELECT s.member_no AS member_no,"
+            " COALESCE(c.profile_json, '') AS profile_json"
+            " FROM scouts s LEFT JOIN candidates c ON c.member_no = s.member_no"
+            " WHERE s.kind='first' AND s.status='sent'"
+            + cutoff_clause
+        )
+        return [(r["member_no"], r["profile_json"]) for r in self.conn.execute(sql, params)]
+
     def settled_mrccids(self, within_days: int) -> set[str]:
         """取り込み時に読み飛ばしてよい候補者の mrccid を返す。
 
@@ -469,24 +539,20 @@ class Repository:
         within_days<=0 でも送信済みは読み飛ばす（重複送信の防止は常に有効）。
         """
         out: set[str] = set()
-        params: list[str] = []
-        # 送信済みは恒久除外。対象外は期限付きで除外。
-        clauses = [
-            "EXISTS (SELECT 1 FROM scouts s"
-            " WHERE s.member_no = c.member_no AND s.kind='first' AND s.status='sent')"
-        ]
-        if within_days > 0:
-            cutoff = (datetime.now() - timedelta(days=within_days)).isoformat(
-                timespec="seconds"
-            )
-            clauses.append("(c.eligible = 0 AND c.updated_at >= ?)")
-            params.append(cutoff)
-        sql = f"SELECT c.profile_json FROM candidates c WHERE {' OR '.join(clauses)}"
-        for r in self.conn.execute(sql, params):
+        members: set[str] = set()
+        for member_no, profile_json in self._settled_rows(within_days):
+            members.add(member_no)
             with contextlib.suppress(Exception):
-                mid = (json.loads(r["profile_json"]) or {}).get("mrccid")
+                mid = (json.loads(profile_json) or {}).get("mrccid")
                 if mid:
                     out.add(mid)
+        # candidates に mrccid が無い分（送信記録だけを復元した候補者など）は
+        # 学習済みの対応表から引く。ここが無いと送信済みの人を毎回取り直し、
+        # 取り込み枠を使い切って新しい候補者へ到達できなくなる。
+        if members:
+            for r in self.conn.execute("SELECT member_no, mrccid FROM member_mrccid"):
+                if r["member_no"] in members:
+                    out.add(r["mrccid"])
         return out
 
     def restore_lost_sends(self, entries: Iterable[tuple[str, str, str, str]]) -> int:

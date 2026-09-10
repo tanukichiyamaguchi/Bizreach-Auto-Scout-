@@ -259,3 +259,75 @@ def test_merge_does_not_downgrade_real_record_to_reconstructed(tmp_path):
         "SELECT subject FROM scouts WHERE member_no='BU1111111' AND kind='first'"
     ).fetchone()["subject"] == "【Premium Offer】実際に送った件名"
     repo.close()
+
+
+# --- 取り込みの読み飛ばし（復元した送信記録が「送信済み」として扱われるか）------
+
+def test_settled_includes_restored_sends_without_candidates_row(tmp_path):
+    """復元した送信記録も「判定済み」に入ること。
+
+    復元表からの復旧は scouts / sent_log にしか行を作らない。判定を candidates
+    起点にしていたため、復元した送信済みの人が毎回取り込み直され、取り込み枠を
+    使い切って新しい候補者へ到達できなくなっていた（2026-08-24 の本番で発生）。
+    """
+    repo = Repository(db_path=tmp_path / "t.db")
+    repo.restore_lost_sends([
+        ("BU1111111", "first", "platinum", "2026-08-18T18:00:00"),
+        ("BU2222222", "first", "pickup", "2026-08-18T18:10:00"),
+    ])
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM candidates").fetchone()["n"] == 0
+
+    # 会員番号では最初から判定済みとして扱える。
+    assert repo.settled_member_nos(30) == {"BU1111111", "BU2222222"}
+    # mrccid はまだ分からないので検索一覧の時点では弾けない。
+    assert repo.settled_mrccids(30) == set()
+
+    # レジュメを取得して対応表を覚えたら、以後は mrccid でも弾ける。
+    repo.remember_mrccid("BU1111111", "MR-1111")
+    repo.remember_mrccid("BU2222222", "MR-2222")
+    assert repo.settled_mrccids(30) == {"MR-1111", "MR-2222"}
+    repo.close()
+
+
+def test_remember_mrccid_normalizes_and_is_idempotent(tmp_path):
+    """会員番号は正準形で覚え、上書きしても重複しない。"""
+    repo = Repository(db_path=tmp_path / "t.db")
+    repo.restore_lost_sends(
+        [("BU1111111", "first", "platinum", "2026-08-18T18:00:00")])
+    repo.remember_mrccid("BU01111111", "MR-old")   # ゼロ埋め表記
+    repo.remember_mrccid("BU1111111", "MR-new")    # 同一人物の更新
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM member_mrccid").fetchone()["n"] == 1
+    assert repo.settled_mrccids(30) == {"MR-new"}
+    repo.remember_mrccid("", "MR-x")               # 空は無視
+    repo.remember_mrccid("BU9999999", "")
+    assert repo.conn.execute(
+        "SELECT COUNT(*) AS n FROM member_mrccid").fetchone()["n"] == 1
+    repo.close()
+
+
+def test_settled_does_not_include_unsent_or_stale_ineligible(tmp_path):
+    """未送信の対象者と、判定が古い対象外は読み飛ばさない。"""
+    from datetime import datetime, timedelta
+
+    repo = Repository(db_path=tmp_path / "t.db")
+    cand = make_candidate(member_no="BU5555555")
+    repo.upsert_candidate(cand, check_eligibility(cand))   # 対象・未送信
+    repo.remember_mrccid("BU5555555", "MR-5555")
+
+    old = (datetime.now() - timedelta(days=90)).isoformat(timespec="seconds")
+    ng = make_candidate(member_no="BU6666666")
+    result = check_eligibility(ng)
+    result.eligible = False
+    repo.upsert_candidate(ng, result)
+    repo.conn.execute("UPDATE candidates SET updated_at=? WHERE member_no=?",
+                      (old, "BU6666666"))
+    repo.conn.commit()
+    repo.remember_mrccid("BU6666666", "MR-6666")
+
+    settled = repo.settled_member_nos(30)
+    assert "BU5555555" not in settled      # 未送信は次回送るため残す
+    assert "BU6666666" not in settled      # 90日前の対象外判定は期限切れ
+    assert repo.settled_mrccids(30) == set()
+    repo.close()

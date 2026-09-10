@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
-from ..foreign import is_overseas_school_name
+from ..foreign import has_country_tag, is_japanese_language_school, is_overseas_school_name
 from ..logging_config import logger
 from ..models import Candidate, Education, Employment, Gender
 from .errors import BizreachAuthError
@@ -105,8 +105,47 @@ _LANGUAGE_KEYS = (
 )
 # 語学エントリ内で「言語名」を持つ可能性のあるキー。
 _LANG_NAME_KEYS = ("name", "language", "languageName", "languageType", "type")
+# 語学エントリ内で「言語コード」を持つキー。実データ（2026-09-09 実行ログ）で語学欄は
+#   languageSkills: [{"languageCode": "EN", "level": "Basic"}]
+# の構造と確定した（言語名ではなくコード）。コードは日本語名へ写像して「英語：基礎レベル」
+# の形にする（外国人判定 foreign.py は日本語の言語名・レベル語で照合するため）。
+_LANG_CODE_KEYS = ("languageCode", "langCode", "code")
 # 語学エントリ内で「レベル」を持つ可能性のあるキー。
 _LANG_LEVEL_KEYS = ("level", "proficiency", "languageLevel", "skillLevel", "grade", "ability")
+# 言語コード（ISO 639-1 大文字。ビズリーチ独自の北京語・広東語等のコードも推定で含める）→ 日本語名。
+_LANGUAGE_CODE_NAMES = {
+    "JA": "日本語", "JP": "日本語", "EN": "英語", "ZH": "中国語", "ZH_CN": "北京語", "CMN": "北京語",
+    "ZH_TW": "台湾語", "YUE": "広東語", "ZH_HK": "広東語", "KO": "韓国語", "FR": "フランス語",
+    "DE": "ドイツ語", "ES": "スペイン語", "PT": "ポルトガル語", "IT": "イタリア語", "RU": "ロシア語",
+    "TL": "タガログ語", "FIL": "タガログ語", "VI": "ベトナム語", "TH": "タイ語", "ID": "インドネシア語",
+    "HI": "ヒンディー語", "AR": "アラビア語", "MS": "マレー語", "NL": "オランダ語", "SV": "スウェーデン語",
+    "TR": "トルコ語", "PL": "ポーランド語", "MY": "ミャンマー語", "NE": "ネパール語", "BN": "ベンガル語",
+    "UR": "ウルドゥー語", "TA": "タミル語", "MN": "モンゴル語", "KM": "クメール語", "FA": "ペルシャ語",
+    "UK": "ウクライナ語", "EL": "ギリシャ語", "HE": "ヘブライ語", "CS": "チェコ語", "HU": "ハンガリー語",
+    "DA": "デンマーク語", "FI": "フィンランド語", "NO": "ノルウェー語", "SW": "スワヒリ語",
+}
+# レベル enum（小文字）→ 画面表記。実データで "Basic" / "None"（レベル未設定）を確認済み。
+_LANGUAGE_LEVEL_LABELS = {
+    "native": "ネイティブレベル", "business": "ビジネス会話レベル", "daily": "日常会話レベル",
+    "conversation": "日常会話レベル", "conversational": "日常会話レベル", "basic": "基礎レベル",
+    "beginner": "初級レベル", "elementary": "初級レベル", "intermediate": "中級レベル",
+    "advanced": "上級レベル", "fluent": "上級レベル", "none": "",
+}
+# 未知の言語コード・レベル enum は各1回だけログに出す（マッピング追加のサイン）。
+_logged_language_codes: set[str] = set()
+_logged_language_levels: set[str] = set()
+
+# --- 居住地 -----------------------------------------------------------------
+# レジュメの location は国内なら "J" + 都道府県コード2桁（例: J13=東京都）。それ以外の
+# 非空コードは海外在住（例: アメリカ・カナダ）とみなす。未知のコードは1回だけログに出す。
+_DOMESTIC_LOCATION = re.compile(r"^J\d{2}$")
+_logged_location_codes: set[str] = set()
+
+
+def is_overseas_location(code: str | None) -> bool:
+    """居住地コードが国内の都道府県（J01〜J47）でない＝海外在住か。空は不明として False。"""
+    code = (code or "").strip()
+    return bool(code) and not _DOMESTIC_LOCATION.match(code)
 
 # 語学欄フィールド名を実データから特定するための調査ログ（各1回だけ出す）。
 _logged_resume_keys = False
@@ -220,12 +259,47 @@ def _lang_field(item: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _lang_name(item: dict) -> str:
+    """語学エントリの言語名。言語名が無ければ言語コード（EN 等）を日本語名へ写像する。"""
+    name = _lang_field(item, _LANG_NAME_KEYS)
+    if name:
+        return name
+    code = _lang_field(item, _LANG_CODE_KEYS)
+    if not code:
+        return ""
+    key = code.upper().replace("-", "_")
+    mapped = _LANGUAGE_CODE_NAMES.get(key)
+    if mapped is None:
+        if key not in _logged_language_codes:
+            logger.info("語学欄の未知の言語コード（マッピング追加のサイン）: %s", code)
+            _logged_language_codes.add(key)
+        return code
+    return mapped
+
+
+def _lang_level(item: dict) -> str:
+    """語学エントリのレベル。英語 enum（Native/Business/Basic…）は画面表記へ写像する。"""
+    level = _lang_field(item, _LANG_LEVEL_KEYS)
+    if not level:
+        return ""
+    label = _LANGUAGE_LEVEL_LABELS.get(level.lower())
+    if label is None:
+        # 日本語表記（CSV等）や未知 enum はそのまま使う。英字の未知 enum は1回だけログに出す。
+        if level.isascii() and level not in _logged_language_levels:
+            logger.info("語学欄の未知のレベル値（マッピング追加のサイン）: %s", level)
+            _logged_language_levels.add(level)
+        return level
+    return label
+
+
 def _extract_languages(resume: dict) -> str:
     """レジュメの語学欄を「言語名：レベル」形式の文字列に変換する。
 
-    実データでフィールド名は languageSkills と確認済み（2026-07-14 実行ログ）。内部構造は
-    未確定のため複数の候補キーを試し、構造が想定と異なり抽出できなかった場合は、
-    生の構造を1回だけログに出して次回の修正材料にする（語学情報のみで氏名等は含まない）。
+    実データでフィールド名は languageSkills（2026-07-14 実行ログ）、内部構造は
+    [{"languageCode": "EN", "level": "Basic"}]（2026-09-09 実行ログ）と確認済み。
+    言語コードは日本語名へ、レベル enum は画面表記へ写像し「英語：基礎レベル」の形にする。
+    構造が想定と異なり抽出できなかった場合は、生の構造を1回だけログに出して次回の
+    修正材料にする（語学情報のみで氏名等は含まない）。
     """
     global _logged_resume_keys, _logged_language_field, _logged_language_raw
     if not _logged_resume_keys:
@@ -238,9 +312,9 @@ def _extract_languages(resume: dict) -> str:
         if isinstance(val, list):
             for item in val:
                 if isinstance(item, dict):
-                    name = _lang_field(item, _LANG_NAME_KEYS)
+                    name = _lang_name(item)
                     if name:
-                        level = _lang_field(item, _LANG_LEVEL_KEYS)
+                        level = _lang_level(item)
                         entries.append(f"{name}：{level}".rstrip("："))
                 elif isinstance(item, str) and item.strip():
                     entries.append(item.strip())
@@ -259,8 +333,10 @@ def _extract_languages(resume: dict) -> str:
                 raw = json.dumps(val, ensure_ascii=False)[:600]
             except (TypeError, ValueError):
                 raw = repr(val)[:600]
-            logger.info("語学欄 '%s' は存在するが未対応の構造: %s / resumeLanguage=%r",
-                        key, raw, resume.get("resumeLanguage"))
+            # 空振りが静かに続くと語学欄の外国人判定が丸ごと効かなくなる（2026-07〜09 に実際に
+            # 発生）ため warning にする。
+            logger.warning("語学欄 '%s' は存在するが未対応の構造（語学判定が効いていない）: %s / resumeLanguage=%r",
+                           key, raw, resume.get("resumeLanguage"))
             _logged_language_raw = True
     return ""
 
@@ -308,6 +384,7 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     education = Education.unknown
     university = ""
     overseas_education = False
+    japanese_language_school = False
     edus = resume.get("educations") or []
     if edus:
         best_name = ""
@@ -322,11 +399,21 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
             if raws:
                 logger.info("未対応の学歴グレード（要マッピング確認）: %s（mrccid=%s 大学=%s）",
                             raws, mrccid or member_no, _ja(edus[0].get("name")))
-        # 海外教育機関の判定: いずれかの学歴の学校名が日本語表記でない（ja が空で en のみ、
-        # または ja がラテン文字のみ）場合を海外の大学とみなす。学校の所在国フィールドが
-        # 無いための代替シグナルで、全学歴を対象に「海外の大学卒」を取りこぼさない。
+        # 海外教育機関の判定: いずれかの学歴（高校を含む）の学校名が日本語表記でない（ja が空で
+        # en のみ／ラテン文字のみ／カタカナ主体）か、国名タグ付き（「北京市第一六一中学（中国）」
+        # 「イギリス コベントリー大学」）の場合を海外の学校とみなす。学校の所在国フィールドが
+        # 無いための代替シグナルで、全学歴を対象に取りこぼさない。
         overseas_education = any(
-            is_overseas_school_name(_ja(e.get("name")), _en(e.get("name"))) for e in edus
+            is_overseas_school_name(_ja(e.get("name")), _en(e.get("name")))
+            or has_country_tag(_ja(e.get("name")))
+            or has_country_tag(_en(e.get("name")))
+            for e in edus
+        )
+        # 日本語学校（留学生向け日本語課程）の学歴: 「ISI〜」「〜日本語学校」「〜国際交流学園」等。
+        japanese_language_school = any(
+            is_japanese_language_school(_ja(e.get("name")))
+            or is_japanese_language_school(_en(e.get("name")))
+            for e in edus
         )
 
     # --- 職歴 ---
@@ -392,6 +479,16 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     # 希望条件（興味のある働き方・希望職種・希望業界）。取得できなければ空のまま。
     desired = _extract_desired(resume)
 
+    # --- 居住地（国内は J+都道府県コード。それ以外は海外在住とみなす）---
+    loc = resume.get("location")
+    residence = loc.strip() if isinstance(loc, str) else (_ja(loc) or _en(loc))
+    overseas_residence = is_overseas_location(residence)
+    if overseas_residence and residence not in _logged_location_codes:
+        # コードの実値を把握するため（都道府県コード以外は初出のみ）。ID とコードだけでPIIは含まない。
+        logger.info("居住地コードが国内都道府県(J01〜J47)以外: %s（mrccid=%s）→ 海外在住として扱う",
+                    residence, mrccid or member_no)
+        _logged_location_codes.add(residence)
+
     return Candidate(
         member_no=member_no or mrccid,
         mrccid=mrccid,
@@ -400,6 +497,9 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         education=education,
         university=university,
         overseas_education=overseas_education,
+        japanese_language_school=japanese_language_school,
+        residence=residence,
+        overseas_residence=overseas_residence,
         current_company=current_company,
         current_title=current_title,
         current_tenure_years=current_tenure,
