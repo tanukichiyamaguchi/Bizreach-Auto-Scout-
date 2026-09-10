@@ -181,7 +181,7 @@ cp config/bizreach_selectors.example.yaml config/bizreach_selectors.yaml
 - **kill switch**: `BIZSCOUT_KILL_SWITCH` のファイルを作成すると即時に送信停止。
 - **送信上限**: `BIZSCOUT_MAX_SENDS_PER_RUN`。
 - **重複防止**: 同一会員番号への初回は二度生成・送信しない（SQLite管理）。
-- **対象条件**: 27歳〜42歳／同一企業2.5年以上／男性／大学卒以上／日本人（日本語ネイティブの可能性が高い）を満たさない（または不明の）候補者は自動送信から除外し「要確認」として記録（`bizscout report`）。レジュメに国籍・母語フィールドが無いため、**外国人は3つの代替シグナルで判定**する（詳細は `src/bizreach_scout/foreign.py`）: ①海外の大学卒（学校名が日本語表記でない＝英語表記、またはカタカナ主体「スタンフォード大学」等）、②外国語がネイティブレベル（**レジュメの語学欄のみ**で「英語:ネイティブ」等の申告を判定。英語・中国語・仏語など全言語が対象。ビジネス／日常会話レベルは除外しない）、③職務要約・職歴がほとんど英語で記載（日本語文字の割合が極めて低い）。いずれも `config/scout_rules.yaml` の `exclude_overseas_education` / `exclude_non_japanese_native` / `exclude_english_resume` で無効化可能。
+- **対象条件**: 27歳〜42歳／同一企業2.5年以上／男性／大学卒以上／日本人（日本語ネイティブの可能性が高い）を満たさない（または不明の）候補者は自動送信から除外し「要確認」として記録（`bizscout report`）。レジュメに国籍・母語フィールドが無いため、**外国人は代替シグナルで判定**する（詳細は `src/bizreach_scout/foreign.py`、実例は `tests/test_foreign_profiles.py`）: ①海外の学校卒・高校を含む（学校名が日本語表記でない＝英語表記、カタカナ主体「スタンフォード大学」「カラチ大学」、または国名タグ付き「北京市第一六一中学（中国）」「イギリス コベントリー大学」）、②日本語学校（留学生向け日本語課程）の学歴（「〜日本語学校」「ISI〜」「〜国際交流学園」等）、③日本語ネイティブでない（日本語検定の保有／**語学欄**で「日本語：ビジネス会話レベル」等の非ネイティブ申告／「英語:ネイティブ」「北京語:ネイティブ」等の外国語ネイティブ申告。日本人の「英語:ビジネス／日常会話」は除外しない）、④職務要約・職歴がほとんど英語で記載（日本語文字の割合が極めて低い）、⑤永住権・在留資格・ビザに関する本人の申告（「永住権取得済」「ビザサポート不要」等）、⑥居住地が海外（APIの居住地コードが国内都道府県 J01〜J47 でない）。いずれも `config/scout_rules.yaml` の `exclude_overseas_education` / `exclude_japanese_language_school` / `exclude_non_japanese_native` / `exclude_english_resume` / `exclude_residency_status_mention` / `exclude_overseas_residence` で無効化可能。
 - **人間的な間隔**: 送信間隔・操作間にランダム待機。
 
 ---

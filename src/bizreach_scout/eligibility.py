@@ -5,16 +5,25 @@
 いずれかを満たさない（または判定不能）の場合は eligible=False とし、
 完全自動送信からは除外して「要確認」リストへ回す。
 
-外国人の判定（3シグナル・詳細は foreign.py）:
-- 海外の大学卒（overseas_education）
-- 外国語がネイティブレベル（**語学欄のみ**を対象に判定）
+外国人の判定（詳細は foreign.py）:
+- 海外の学校卒・高校を含む（overseas_education）
+- 日本語学校（留学生向け日本語課程）の学歴（japanese_language_school）
+- 日本語ネイティブでない: 日本語検定の保有／語学欄で日本語が非ネイティブ／外国語がネイティブ
+  （語学の判定は**語学欄のみ**を対象にする）
 - 職務要約・職歴がほとんど英語
+- 永住権・在留資格・ビザに関する本人の申告
+- 居住地が海外（overseas_residence）
 """
 
 from __future__ import annotations
 
 from .config import scout_rules
-from .foreign import has_foreign_native_language, is_english_dominant
+from .foreign import (
+    has_foreign_native_language,
+    has_residency_status_mention,
+    is_english_dominant,
+    japanese_listed_as_non_native,
+)
 from .models import Candidate, Education, EligibilityResult, Gender
 
 _EDU_MAP = {
@@ -81,20 +90,30 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
     elif not candidate.education.meets(min_edu):
         failed.append(f"学歴が{min_edu.value}未満（{candidate.education.value}）")
 
-    # --- 海外の大学卒（外国人の可能性）は対象外 ---------------------------------
-    # 学校名が日本語表記でない（ja が空で en のみ、または ja がラテン文字のみ）場合を
-    # 海外の大学とみなす（所在国フィールドが無いための代替シグナル。CSV/テキスト取り込みでは
-    # 判定材料が無いため常に False＝この条件では対象外にしない）。
+    # --- 海外の学校卒（高校を含む・外国人の可能性）は対象外 ----------------------
+    # いずれかの学歴の学校名が日本語表記でない（ja が空で en のみ／ラテン文字のみ／カタカナ主体）
+    # か、国名タグ付き「〜（中国）」「イギリス 〜大学」の場合を海外の学校とみなす（所在国
+    # フィールドが無いための代替シグナル。CSV/テキスト取り込みでは判定材料が無いため常に
+    # False＝この条件では対象外にしない）。
     if cfg.get("exclude_overseas_education", True) and candidate.overseas_education:
-        failed.append("海外の教育機関（大学）出身のため対象外（外国人の可能性）")
+        failed.append("海外の教育機関（高校・大学等）出身のため対象外（外国人の可能性）")
 
-    # --- 外国語がネイティブレベル（外国人の可能性）は対象外 ----------------------
-    # 判定は**語学（言語）欄のみ**を対象にする（本文全体で「ネイティブ」を拾わない）。
-    # 併せて日本語検定(JLPT等)の保有も非ネイティブの代替シグナルとして扱う。
+    # --- 日本語学校（留学生向け日本語課程）の学歴は対象外 ------------------------
+    # 「ISIキャリア外語アカデミー」「A.C.C.国際交流学園 日本語学校」等。日本語ネイティブは在籍しない。
+    if cfg.get("exclude_japanese_language_school", True) and candidate.japanese_language_school:
+        failed.append("日本語学校（留学生向け日本語課程）の学歴があるため対象外（外国人の可能性）")
+
+    # --- 日本語ネイティブでない（外国人の可能性）は対象外 --------------------------
+    # 語学の判定は**語学（言語）欄のみ**を対象にする（本文全体で「ネイティブ」を拾わない）。
+    # 該当する理由は全て列挙する（要確認リストで根拠が分かるように）。
     if cfg.get("exclude_non_japanese_native", True):
         if _has_japanese_proficiency_cert(candidate):
             failed.append("日本語検定の保有により日本語ネイティブでない可能性があるため対象外")
-        elif has_foreign_native_language(candidate.languages):
+        # 日本語ネイティブは語学欄に日本語を書かないか「ネイティブ」と書く。
+        # 「日本語：ビジネス会話レベル／日常会話レベル」は外国人がほぼ確実。
+        if japanese_listed_as_non_native(candidate.languages):
+            failed.append("語学欄で日本語を非ネイティブ（ビジネス会話レベル等）と申告のため対象外（外国人の可能性）")
+        if has_foreign_native_language(candidate.languages):
             failed.append("語学欄で外国語がネイティブと申告のため対象外（外国人の可能性）")
 
     # --- 職務要約・職歴がほとんど英語（外国人の可能性）は対象外 ------------------
@@ -102,6 +121,19 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
         "\n".join([candidate.summary, candidate.raw_profile, candidate.foreign_text])
     ):
         failed.append("職務要約・職歴がほとんど英語で記載のため対象外（外国人の可能性）")
+
+    # --- 永住権・在留資格・ビザに関する本人の申告は対象外 ------------------------
+    # 「永住権取得済」「ビザサポート不要」等、本人の在留状況として書く言い回しのみ拾う。
+    if cfg.get("exclude_residency_status_mention", True) and has_residency_status_mention(
+        "\n".join([candidate.summary, candidate.raw_profile, candidate.foreign_text])
+    ):
+        failed.append("永住権・在留資格・ビザに関する自己申告があるため対象外（外国人の可能性）")
+
+    # --- 居住地が海外は対象外 ---------------------------------------------------
+    # API の居住地コードが国内の都道府県（J01〜J47）でない場合（例: アメリカ・カナダ在住）。
+    if cfg.get("exclude_overseas_residence", True) and candidate.overseas_residence:
+        where = f"（{candidate.residence}）" if candidate.residence else ""
+        failed.append(f"居住地が海外{where}のため対象外（海外在住・外国人の可能性）")
 
     # --- 同一企業での勤続年数 -------------------------------------------------
     min_years = cfg.get("min_same_company_years", 2.5)

@@ -1,14 +1,21 @@
 """外国人（日本語ネイティブでない候補者）検出のヒューリスティック。
 
 Bizreach のレジュメには「国籍」「母語」の直接フィールドが無いため、本人の
-自己申告テキスト・学歴名・語学欄から次の3つの代替シグナルで外国人を判定する。
+自己申告テキスト・学歴名・語学欄・居住地から次の代替シグナルで外国人を判定する。
 
-1. 海外の大学卒         … ``is_overseas_school_name``（学校名が日本語表記でない）
-2. 外国語がネイティブ    … ``has_foreign_native_language``（英語/中国語等 × ネイティブ表記）
-3. 職務要約・職歴が英語  … ``is_english_dominant``（テキストがほぼラテン文字）
+1. 海外の学校卒（高校を含む）… ``is_overseas_school_name``（学校名が日本語表記でない）
+                              ``has_country_tag``（「北京市第一六一中学（中国）」「イギリス コベントリー大学」）
+2. 日本語学校の学歴          … ``is_japanese_language_school``（留学生向け日本語課程。ISI・日本語学校 等）
+3. 語学欄で日本語が非ネイティブ … ``japanese_listed_as_non_native``（「日本語：ビジネス会話レベル」等。
+                              日本語ネイティブは語学欄に日本語を書かないか「ネイティブ」と書く）
+4. 外国語がネイティブ        … ``has_foreign_native_language``（英語/北京語/ヒンディー語 等 × ネイティブ表記）
+5. 職務要約・職歴が英語      … ``is_english_dominant``（テキストがほぼラテン文字）
+6. 永住権・在留資格・ビザの自己申告 … ``has_residency_status_mention``
+7. 居住地が海外              … （API の居住地コードで判定。``bizreach/api.py``）
 
 方針: 「誤って外国人へ送る」より「疑わしきは要確認に回す」方が安全なため、
 取りこぼしを減らす側（やや厳しめ）に閾値を置く。誤検知は送信されず要確認リストへ回る。
+実例（2026-09 運用者提示の4名）は tests/test_foreign_profiles.py に固定してある。
 """
 
 from __future__ import annotations
@@ -34,7 +41,13 @@ _DOMESTIC_KATAKANA_SCHOOLS = (
     "ハリウッド",
     "ビジネス・ブレークスルー",
     "ビジネスブレークスルー",
+    "ノースアジア",  # ノースアジア大学（秋田）
 )
+# 核から取り除く設置形態・分野の語（「カリフォルニア州立大学」「マサチューセッツ工科大学」の
+# 州立・工科は校名の一部ではなく、海外校でも漢字になるため）。
+_CORE_DESCRIPTORS = ("州立", "市立", "国立", "公立", "私立", "工科", "理工", "科技")
+# 校名に大学系の接尾辞が無いときに核の終端とみなす区切り（学部・専攻が続く場合）。
+_CORE_DELIMITER = re.compile(r"[\s\u3000/／]")
 
 # 職務要約・職歴が「ほぼ英語」と見なす閾値。
 _MIN_LATIN_LETTERS = 50  # これ未満は「英語しか書いていない」とは見なさない（誤検知防止）
@@ -112,12 +125,29 @@ def is_katakana_foreign_school(name: str | None) -> bool:
     name = (name or "").strip()
     if not name or any(dom in name for dom in _DOMESTIC_KATAKANA_SCHOOLS):
         return False
-    core = name
-    for suf in _UNIVERSITY_SUFFIXES:
-        core = core.replace(suf, "")
+    core = _school_core(name)
+    for word in _CORE_DESCRIPTORS:
+        core = core.replace(word, "")
     if _KANJI_OR_HIRAGANA.search(core):
         return False  # 漢字・ひらがなを含む＝国内校
     return bool(_KATAKANA.search(core))
+
+
+def _school_core(name: str) -> str:
+    """校名の核＝最初に現れる「大学／大学院／大学校」の手前まで。
+
+    「カラチ大学 数学/統計/コンピュータサイエンス」のように学部・専攻が後ろに続いても
+    核は「カラチ」になる（従来は後続の漢字で国内校と誤判定していた）。接尾辞が無ければ
+    最初の空白・スラッシュまでを核とする。
+    """
+    best: tuple[int, str] | None = None
+    for suf in _UNIVERSITY_SUFFIXES:
+        i = name.find(suf)
+        if i >= 0 and (best is None or i < best[0] or (i == best[0] and len(suf) > len(best[1]))):
+            best = (i, suf)
+    if best is not None:
+        return name[: best[0]]
+    return _CORE_DELIMITER.split(name, 1)[0]
 
 
 def is_overseas_school_name(ja: str | None, en: str | None) -> bool:
@@ -196,3 +226,149 @@ def is_english_dominant(text: str | None) -> bool:
     if _count(_LATIN_CHAR, text or "") < _MIN_LATIN_LETTERS:
         return False
     return japanese_char_ratio(text) < _MAX_JP_RATIO
+
+
+# --- 語学欄で「日本語」が非ネイティブとして申告されているか --------------------
+# 語学欄の1エントリを区切る文字（API 経路は「、」区切りで生成する）。「/」「／」は
+# UI の「英語 / ネイティブレベル」のように言語名とレベルの区切りにも使われるため含めない。
+_ENTRY_SEPARATORS = "、,;；\n。"
+# 「レベルを申告している」と見なす語。これが無い（例:「日本語のほか英語も可」）場合は
+# レベル表記ではないので判定しない（誤検知防止）。
+_LEVEL_MARKERS = (
+    "レベル", "会話", "ビジネス", "日常", "初級", "中級", "上級", "基礎", "読み書き", "級",
+    "business", "daily", "conversation", "basic", "elementary", "intermediate",
+    "advanced", "fluent", "beginner", "level", "jlpt", "n1", "n2", "n3", "n4", "n5",
+)
+
+
+def japanese_listed_as_non_native(text: str | None) -> bool:
+    """語学欄で「日本語」をネイティブ以外のレベルで申告しているか。
+
+    日本語ネイティブは語学欄に日本語を書かないか「日本語：ネイティブ」と書く。
+    「日本語：ビジネス会話レベル」「日本語：日常会話レベル」「Japanese: Business」は
+    外国人がほぼ確実（運用者提示の実例 3/4 名がこの形）。
+
+    「日本語」トークンの直後から、次のエントリ区切りまたは次の言語名までをその
+    エントリのレベル表記とみなし、ネイティブ表記が無く、かつレベル語を含むときのみ True。
+    レベル語が無い（「日本語 / 英語」のような列挙のみ）場合は判定しない。
+    """
+    low = (text or "").lower()
+    if not low:
+        return False
+    stop_tokens = _FOREIGN_LANGS + _JP_LANGS
+    for _start, end in _spans(_JP_LANGS, low):
+        seg = low[end:]
+        cut = len(seg)
+        for sep in _ENTRY_SEPARATORS:
+            i = seg.find(sep)
+            if 0 <= i < cut:
+                cut = i
+        for tok in stop_tokens:
+            i = seg.find(tok)
+            if 0 <= i < cut:
+                cut = i
+        seg = seg[:cut]
+        if any(m in seg for m in _NATIVE_MARKERS):
+            continue
+        if any(m in seg for m in _LEVEL_MARKERS):
+            return True
+    return False
+
+
+# --- 学校名・企業名の国名タグ（例:「北京市第一六一中学（中国）」）------------------
+# 本人が入力する学校名には所在国を括弧書きで添える例が多い。「（中国）」のように
+# 括弧内が国名そのもの、または「イギリス コベントリー大学」のように先頭の国名の直後に
+# 区切りがある場合のみ国名タグとみなす。「中国学園大学」「（中国語）」は一致しない。
+_COUNTRY_NAMES = (
+    # アジア
+    "中国", "中華人民共和国", "台湾", "香港", "マカオ", "韓国", "大韓民国", "北朝鮮", "モンゴル",
+    "インド", "パキスタン", "バングラデシュ", "スリランカ", "ネパール", "ブータン",
+    "ベトナム", "タイ", "ラオス", "カンボジア", "ミャンマー", "マレーシア", "シンガポール",
+    "インドネシア", "フィリピン", "ブルネイ", "ウズベキスタン", "カザフスタン",
+    # 中東・アフリカ
+    "イラン", "イラク", "イスラエル", "トルコ", "サウジアラビア", "アラブ首長国連邦", "UAE",
+    "エジプト", "南アフリカ", "ナイジェリア", "ケニア", "ガーナ", "モロッコ",
+    # 欧州
+    "イギリス", "英国", "アイルランド", "フランス", "ドイツ", "イタリア", "スペイン", "ポルトガル",
+    "オランダ", "ベルギー", "スイス", "オーストリア", "スウェーデン", "ノルウェー", "デンマーク",
+    "フィンランド", "ポーランド", "チェコ", "ハンガリー", "ルーマニア", "ギリシャ", "ロシア",
+    "ウクライナ",
+    # 米州・オセアニア
+    "アメリカ", "米国", "アメリカ合衆国", "カナダ", "メキシコ", "ブラジル", "アルゼンチン", "チリ",
+    "コロンビア", "ペルー", "オーストラリア", "ニュージーランド",
+    # 総称
+    "海外", "国外",
+    # 英語表記
+    "China", "Taiwan", "Hong Kong", "Korea", "South Korea", "Mongolia", "India", "Pakistan",
+    "Bangladesh", "Sri Lanka", "Nepal", "Vietnam", "Thailand", "Cambodia", "Myanmar",
+    "Malaysia", "Singapore", "Indonesia", "Philippines", "Iran", "Israel", "Turkey",
+    "Saudi Arabia", "Egypt", "South Africa", "Nigeria", "Kenya", "Morocco",
+    "UK", "U.K.", "United Kingdom", "England", "Scotland", "Ireland", "France", "Germany",
+    "Italy", "Spain", "Portugal", "Netherlands", "Belgium", "Switzerland", "Austria", "Sweden",
+    "Norway", "Denmark", "Finland", "Poland", "Russia", "Ukraine",
+    "USA", "U.S.A.", "U.S.", "United States", "America", "Canada", "Mexico", "Brazil",
+    "Argentina", "Australia", "New Zealand", "Overseas",
+)
+_COUNTRY_ALT = "|".join(re.escape(c) for c in sorted(_COUNTRY_NAMES, key=len, reverse=True))
+# 括弧内が国名そのもの: 「（中国）」「(China)」。
+_COUNTRY_IN_PARENS = re.compile(rf"[（(]\s*(?:{_COUNTRY_ALT})\s*[)）]", re.IGNORECASE)
+# 先頭の国名の直後に空白・中黒・スラッシュ: 「イギリス コベントリー大学」「中国・北京大学」。
+_COUNTRY_LEADING = re.compile(rf"^\s*(?:{_COUNTRY_ALT})(?=[\s\u3000・/／])", re.IGNORECASE)
+
+
+def has_country_tag(text: str | None) -> bool:
+    """学校名などに日本以外の国名タグが付いているか（「北京市第一六一中学（中国）」等）。"""
+    text = (text or "").strip()
+    if not text:
+        return False
+    return bool(_COUNTRY_IN_PARENS.search(text) or _COUNTRY_LEADING.match(text))
+
+
+# --- 日本語学校（留学生向け日本語課程）---------------------------------------------
+# 校名にこれらを含む学校は日本語を母語としない留学生向け。日本語ネイティブは在籍しない。
+# 「日本語教育」「日本語学科」は日本人（日本語教師志望・日本語学専攻）も該当するため含めない。
+_JP_LANGUAGE_SCHOOL_KEYWORDS = (
+    "日本語学校", "日本語学院", "日本語センター", "日本語別科", "留学生別科", "留学生センター",
+    "日本語教育センター", "日本語課程", "日本語コース", "国際交流学園", "国際交流学院",
+    "japanese language school", "japanese language institute", "japanese language center",
+    "japanese language centre", "nihongo",
+)
+# 校名の先頭がこれで始まる学校グループ（ISI: ISIランゲージスクール／ISI外語カレッジ／
+# ISIキャリア外語アカデミー 等はいずれも留学生向け日本語学校）。直後に英字が続く別名
+# （例: "ISIS..."）は一致させない。
+_JP_LANGUAGE_SCHOOL_PREFIXES = re.compile(r"^(?:ISI)(?![A-Za-z])")
+
+
+def is_japanese_language_school(name: str | None) -> bool:
+    """校名が留学生向けの日本語学校（日本語課程）を指すか。"""
+    name = (name or "").strip()
+    if not name:
+        return False
+    low = name.lower()
+    if any(k in low for k in _JP_LANGUAGE_SCHOOL_KEYWORDS):
+        return True
+    return bool(_JP_LANGUAGE_SCHOOL_PREFIXES.match(name))
+
+
+# --- 永住権・在留資格・ビザの自己申告 ---------------------------------------------
+# 本人が自分の在留状況として書く言い回しに限定する。「在留資格」「特定技能」等の単語
+# だけでは、人材業界の日本人（外国人採用支援の経験）を誤検知するため含めない。
+_RESIDENCY_PHRASES = (
+    "永住権を取得", "永住権取得", "永住権保有", "永住権あり", "永住権有", "永住者です", "永住ビザ",
+    "在留資格：", "在留資格:", "在留資格は", "在留カード", "配偶者ビザ",
+    "就労制限なし", "就労制限はなし", "就労制限は無", "就労制限無し",
+    "ビザサポート不要", "ビザサポートは不要", "ビザ支援不要", "ビザ更新", "ビザの更新",
+    "就労ビザを保有", "就労ビザ保有", "就労ビザ取得", "高度専門職ビザ", "高度専門職1号", "高度専門職2号",
+    "高度人材ポイント",
+    "permanent resident", "permanent residency", "no visa sponsorship",
+    "visa sponsorship is not required", "visa sponsorship not required", "work visa holder",
+    "spouse visa", "highly skilled professional visa",
+)
+
+
+def has_residency_status_mention(text: str | None) -> bool:
+    """自己PR等に、本人の永住権・在留資格・ビザに関する申告があるか。"""
+    low = (text or "").lower()
+    if not low:
+        return False
+    return any(p.lower() in low for p in _RESIDENCY_PHRASES)

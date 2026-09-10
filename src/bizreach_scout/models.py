@@ -85,10 +85,17 @@ class Candidate(BaseModel):
     gender: Gender = Gender.unknown
     education: Education = Education.unknown
     university: str = ""
-    # 最終学歴の学校名に日本語表記(ja)が無く英語表記(en)のみの場合 True
-    # （海外の教育機関出身の可能性。Bizreach APIのレジュメには学校の所在国フィールドが
-    # 無いための代替シグナル。CSV/テキスト取り込みでは判定材料が無いため常に False）。
+    # いずれかの学歴（高校を含む）の学校名が海外を示す場合 True: 日本語表記(ja)が無く
+    # 英語表記(en)のみ／ラテン文字のみ／カタカナ主体／国名タグ付き「〜（中国）」。
+    # Bizreach APIのレジュメには学校の所在国フィールドが無いための代替シグナル
+    # （CSV/テキスト取り込みでは判定材料が無いため常に False）。
     overseas_education: bool = False
+    # いずれかの学歴が留学生向けの日本語学校（日本語課程）の場合 True（外国人の可能性）。
+    japanese_language_school: bool = False
+    # 居住地（Bizreach API の location コード。国内は J01〜J47 の都道府県コード）。
+    residence: str = ""
+    # 居住地コードが国内の都道府県でない場合 True（海外在住。外国人または海外勤務中）。
+    overseas_residence: bool = False
 
     current_company: str = ""
     current_title: str = ""
