@@ -164,7 +164,9 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       BIZREACH_EMAIL: ${{ secrets.BIZREACH_EMAIL }}
       BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
-      BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-5' }}
+      # 生成モデル。Opus 系を指定すると config.OPUS_MODEL（最新 Opus）へ読み替えられる
+      # ため、repo variable に古い Opus が残っていても最新で動く。
+      BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-5-5' }}
       # 1日1回の実行に集約したため、この値がそのまま「1日の送信上限」になる。
       # 従来は1日2回×10通=20通だったので、通数を維持するため 20 を既定にしている。
       # 変更は repo variable BIZSCOUT_MAX_SENDS_PER_DAY で行う。

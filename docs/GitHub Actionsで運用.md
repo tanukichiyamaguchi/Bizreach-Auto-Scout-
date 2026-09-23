@@ -72,7 +72,7 @@ base64 -w0 data/sessions/bizreach_state.json   # 出力された文字列をコ�
 | `BIZSCOUT_SEND_HOUR_JST` | `11` | 送信を開始する時刻（JSTの「時」）。この時刻以降に着地した最初の起動が送信する |
 | `BIZSCOUT_SEND_DEADLINE_HOUR_JST` | `19` | この時刻（JSTの「時」）以降に着地した起動は送信せず、本日を見送る（深夜に届かせないため）。見送った日は ⚠️ 警告が出る |
 | `BIZSCOUT_MAX_SENDS_PER_DAY` | `20` | **1日に送る初回スカウトの合計上限**（1日1回実行なので1実行の上限と同じ）。保存検索ごとではなく**全保存検索の合計**（4つ登録していても合計でこの件数まで）。この件数に達した時点で残りの保存検索は開かず、次回の実行に回す。再送にも同じ値が別枠で適用される。ピックアップは無料枠のため適用されない |
-| `BIZSCOUT_MODEL` | `claude-opus-5` | 生成モデル（任意）。**Opus は Opus 5 を使う方針**のため、旧 Opus のモデル名が残っていても `claude-opus-5` に読み替えて実行します（`bizscout doctor` の「生成モデル」行に読み替えを表示） |
+| `BIZSCOUT_MODEL` | `claude-opus-5-5` | 生成モデル（任意）。**Opus は最新の Opus を使う方針**のため、旧 Opus のモデル名（`claude-opus-5` など）が残っていても `claude-opus-5-5` に読み替えて実行します（`bizscout doctor` の「生成モデル」行に読み替えを表示）。未設定でよく、値を変えたいときだけ設定します |
 | `BIZSCOUT_GSHEET_SPREADSHEET_ID` | `1AbC...` | スカウト分析の出力先スプレッドシートID（**任意**・`docs/スカウト分析.md` 参照） |
 | `BIZSCOUT_EXPECT_STATE` | `true` | **状態DB消失ガード。既定で有効**（Variable 未設定でも `true` として動きます）。送信履歴DBが空のまま実送信しようとしたら中断する（下記「状態DBが消えたときの復旧」参照）。**本当の初回運用のときだけ `false` を明示設定**する |
 
