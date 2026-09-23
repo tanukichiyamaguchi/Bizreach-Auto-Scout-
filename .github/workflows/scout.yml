@@ -35,15 +35,27 @@ on:
         type: string
         default: ""
   schedule:
-    # GitHub の schedule は毎時00分が最も混雑し、数時間の遅延やドロップが起こり得る。
-    # そのため 00分を避けた分に設定し（主実行）、さらに予備の時刻を1本用意して
-    # 「その日ぜんぶ未実行」を防ぐ。重複防止(SQLite)により両方走っても二重送信にはならず、
-    # concurrency(group=bizscout-scout) で同時実行もされない。
-    # 定期実行は repo variables の設定値を使う。
-    # 実測で1〜2.5時間ほど遅延することが分かったため、遅くなりすぎないよう
-    # 従来より3時間早めた時刻に設定（体感の到着時刻を19時台後半→17時台後半に前倒し）。
-    - cron: "9 7 * * *"   # 主: 16:09 JST（07:09 UTC）
-    - cron: "39 9 * * *"  # 予備: 18:39 JST（09:39 UTC・主がドロップ/大幅遅延した日の保険）
+    # 【設計】送信は JST 11時台に着地させる（運用者指定）。
+    #
+    # GitHub の schedule は「指定時刻に起動する」保証がない。実測（2026-09-09〜14）で
+    # 3時間25分〜6時間48分の遅延が毎日発生し、9/14 は2本のうち1本が丸ごとドロップした。
+    # 結果、16:09 JST 指定の実行が 22:57 JST に着地していた。
+    # 単純に時刻を前倒ししても、GitHub 側の混雑が解消した日に早朝へ着地してしまう。
+    #
+    # そこで「時刻を狙う」のをやめ、**1時間おきに起動し、最初に11時台以降へ着地した
+    # 実行だけが送信する**設計にした（判定は gate ジョブ）。遅延0〜7時間のどれでも
+    # 11時台〜以降の最初の1回で送信でき、残りは数秒で終了する。
+    # 当日2回目以降の送信は gate のマーカーで抑止するため、通数は1日1回分のまま。
+    #
+    # 毎時00分は最も混雑するため :07 に置く。UTC 19:07〜翌02:07（JST 04:07〜11:07）。
+    - cron: "7 19 * * *"  # JST 04:07（遅延7時間で11時台に着地）
+    - cron: "7 20 * * *"  # JST 05:07（遅延6時間）
+    - cron: "7 21 * * *"  # JST 06:07（遅延5時間）
+    - cron: "7 22 * * *"  # JST 07:07（遅延4時間）
+    - cron: "7 23 * * *"  # JST 08:07（遅延3時間）
+    - cron: "7 0 * * *"   # JST 09:07（遅延2時間）
+    - cron: "7 1 * * *"   # JST 10:07（遅延1時間）
+    - cron: "7 2 * * *"   # JST 11:07（遅延なし）
 
 # 同時実行を禁止して二重送信を防ぐ（キューイング）。
 concurrency:
@@ -56,13 +68,96 @@ permissions:
   actions: read
 
 jobs:
+  # 本日の送信枠かどうかだけを判定する軽量ジョブ（数秒で終わる）。
+  # Python/Chromium の準備前に落とすため、本体とは別ジョブにしている。
+  # 判定はJSTで行い、次のすべてを満たすときだけ本体を動かす:
+  #   1. 送信開始時刻（既定 11時 JST）以降である
+  #   2. 締切時刻（既定 19時 JST）より前である（深夜に届くのを防ぐ）
+  #   3. 本日まだ送信していない（当日マーカーのキャッシュが無い）
+  # 手動実行(workflow_dispatch)は明示操作なので、この判定を行わず常に実行する。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+      jst_date: ${{ steps.now.outputs.jst_date }}
+      reason: ${{ steps.decide.outputs.reason }}
+      deadline_passed: ${{ steps.decide.outputs.deadline_passed }}
+    steps:
+      - name: 現在のJST日時
+        id: now
+        run: |
+          {
+            echo "jst_date=$(TZ=Asia/Tokyo date +%Y-%m-%d)"
+            echo "jst_hour=$(TZ=Asia/Tokyo date +%-H)"
+            echo "jst_time=$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M %a')"
+          } >> "$GITHUB_OUTPUT"
+
+      # 当日マーカー。本体が送信を始めた時点で保存され、同じ日の後続の起動を止める。
+      # lookup-only なので実体のダウンロードは行わない（存在確認のみ）。
+      - name: 本日の送信済みマーカーを確認
+        id: marker
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: .bizscout-daily
+          key: bizscout-daily-${{ steps.now.outputs.jst_date }}
+          lookup-only: true
+
+      - name: 送信枠かを判定
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          JST_HOUR: ${{ steps.now.outputs.jst_hour }}
+          JST_TIME: ${{ steps.now.outputs.jst_time }}
+          ALREADY: ${{ steps.marker.outputs.cache-hit }}
+          # 送信を開始する時刻（JSTの時）。既定は運用者指定の11時。
+          START_HOUR: ${{ vars.BIZSCOUT_SEND_HOUR_JST || '11' }}
+          # この時刻を過ぎたら本日は見送る（深夜に届かせないための締切）。
+          DEADLINE_HOUR: ${{ vars.BIZSCOUT_SEND_DEADLINE_HOUR_JST || '19' }}
+        run: |
+          set -euo pipefail
+          # $3 は「締切超過で見送った」フラグ。後段の警告ステップの条件に使う
+          # （式側で数値比較をせずに済むよう、判定結果をそのまま渡す）。
+          decide() {
+            {
+              echo "should_run=$1"
+              echo "reason=$2"
+              echo "deadline_passed=${3:-false}"
+            } >> "$GITHUB_OUTPUT"
+            echo "$2"
+          }
+          if [ "$EVENT" != "schedule" ]; then
+            decide true "手動実行のため、送信枠の判定をせずに実行します（現在 $JST_TIME JST）。"
+          elif [ "$ALREADY" = "true" ]; then
+            decide false "本日はすでに送信済みのため、この起動はスキップします（現在 $JST_TIME JST）。"
+          elif [ "$JST_HOUR" -lt "$START_HOUR" ]; then
+            decide false "送信開始時刻（${START_HOUR}時 JST）前のためスキップします（現在 $JST_TIME JST）。GitHubの遅延が小さい日は、後続の起動が${START_HOUR}時台に着地します。"
+          elif [ "$JST_HOUR" -ge "$DEADLINE_HOUR" ]; then
+            decide false "締切（${DEADLINE_HOUR}時 JST）を過ぎたため、本日は見送ります（現在 $JST_TIME JST）。GitHubの定期実行が終日大幅に遅延した可能性があります。" true
+          else
+            decide true "送信枠内のため実行します（現在 $JST_TIME JST / 開始${START_HOUR}時・締切${DEADLINE_HOUR}時）。"
+          fi
+
+      # 終日スキップのまま終わった日を見落とさないよう、締切超過だけは警告として残す。
+      - name: 締切超過の警告
+        if: steps.decide.outputs.deadline_passed == 'true'
+        run: |
+          echo "::warning::${{ steps.decide.outputs.reason }}"
+          echo "## ⚠️ 本日は送信を見送りました" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.decide.outputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+
   scout:
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     # 注意: 送信が多い日は「送信間隔(20-60秒)×件数＋受信箱スキャン(約7分)」で30分を
     # 超えることがある。30分設定だった2026-07に3回タイムアウトでキャンセルされ、
     # 送信後のキャッシュ保存が走らず計44件の送信記録が消失した（送信自体は完了済み）。
-    # 実測最長28分に対し十分な余裕を取る。
-    timeout-minutes: 50
+    # 1日1回・20通運用では 2026-09-14 の実測（12通で28分・1通あたり約94秒）から
+    # 20通で約45分、ピックアップが多い日はさらに伸びる。再びタイムアウトで
+    # 送信記録を失わないよう、実測の2倍の余裕を取る。
+    timeout-minutes: 90
     env:
       # 全タイムスタンプ（送信記録・週次集計）をJSTで統一する。
       TZ: "Asia/Tokyo"
@@ -70,7 +165,12 @@ jobs:
       BIZREACH_EMAIL: ${{ secrets.BIZREACH_EMAIL }}
       BIZREACH_PASSWORD: ${{ secrets.BIZREACH_PASSWORD }}
       BIZSCOUT_MODEL: ${{ vars.BIZSCOUT_MODEL || 'claude-opus-5' }}
-      BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_RUN || '10' }}
+      # 1日1回の実行に集約したため、この値がそのまま「1日の送信上限」になる。
+      # 従来は1日2回×10通=20通だったので、通数を維持するため 20 を既定にしている。
+      # 変更は repo variable BIZSCOUT_MAX_SENDS_PER_DAY で行う。
+      # 注意: 旧 variable BIZSCOUT_MAX_SENDS_PER_RUN はもう参照しない（1回=1日になり
+      # 名前が実態と合わないため）。設定済みなら削除してよい。
+      BIZSCOUT_MAX_SENDS_PER_RUN: ${{ vars.BIZSCOUT_MAX_SENDS_PER_DAY || '20' }}
       # 状態DB消失ガード。送信履歴が空のまま実送信しようとしたら中断する
       # （actions/cache 失効で重複防止データが消え、全候補者へ再送信する事故を防ぐ）。
       # 既定を true にしているのは、本番が既に多数の送信実績を持つため。
@@ -124,7 +224,12 @@ jobs:
             SEARCH_URL_VAL="$IN_SEARCH_URL"
           else
             echo "BIZSCOUT_DRY_RUN=${{ vars.BIZSCOUT_DRY_RUN || 'true' }}" >> "$GITHUB_ENV"
-            echo "RUN_MAX=${{ vars.BIZSCOUT_MAX || '30' }}" >> "$GITHUB_ENV"
+            # 保存検索1件あたりの取り込み上限。送信上限(20通)に届かせるだけの母数が要る。
+            # 実測の通過率は約45%（2026-09-14: 22件取り込み→10件送信）なので、
+            # 保存検索4件×15 = 60件 ≒ 27件送信ぶんの母数を確保する。
+            # 変更は repo variable BIZSCOUT_INGEST_PER_SEARCH で行う（旧 BIZSCOUT_MAX は
+            # 1日2回運用時の値(10)のままで送信上限に届かないため参照しない）。
+            echo "RUN_MAX=${{ vars.BIZSCOUT_INGEST_PER_SEARCH || '15' }}" >> "$GITHUB_ENV"
             echo "RUN_MODE=scout" >> "$GITHUB_ENV"
             SEARCH_URL_VAL="$VAR_SEARCH_URL"
           fi
@@ -211,6 +316,35 @@ jobs:
       # 覆い隠す事故を防ぐ（2026-08-17 に発生。復元表に無い送信記録がシートから消えた）。
       - name: Allow state saves
         run: echo "STATE_OK=true" >> "$GITHUB_ENV"
+
+      # 本日の送信枠を使い切ったことを記録する（gate ジョブがこれを見て後続の起動を止める）。
+      # 定期実行は dry-run でも記録する（1日1回に保つため）。手動実行は実送信のときだけ
+      # 記録し、dry-run の試し実行がその日の枠を潰さないようにする。
+      # 送信を**始める前**に置くのが要点:
+      #   - これより前（準備・点検）で落ちた実行は準備の失敗なので、後続の起動に再挑戦させる
+      #   - これより後で落ちた実行は送信が進んでいる可能性があるため、再挑戦させない
+      #     （後続が新しい候補者へもう1バッチ送ってしまい、1日の通数が倍になるのを防ぐ）
+      - name: Mark today's send slot as used
+        if: >-
+          github.event_name == 'schedule'
+          || (env.BIZSCOUT_DRY_RUN == 'false'
+              && (env.RUN_MODE == 'scout' || env.RUN_MODE == 'pickup'))
+        run: |
+          mkdir -p .bizscout-daily
+          echo "run_id=${{ github.run_id }} at $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M %Z')" \
+            > .bizscout-daily/done
+          cat .bizscout-daily/done
+
+      - name: Save today's send marker
+        if: >-
+          github.event_name == 'schedule'
+          || (env.BIZSCOUT_DRY_RUN == 'false'
+              && (env.RUN_MODE == 'scout' || env.RUN_MODE == 'pickup'))
+        continue-on-error: true   # 同日に既にマーカーがあるときの保存失敗で実行を止めない
+        uses: actions/cache/save@v4
+        with:
+          path: .bizscout-daily
+          key: bizscout-daily-${{ needs.gate.outputs.jst_date }}
 
       # 本日のピックアップ（無料枠・本命）。求人ベース＋候補者ベースの両セクションを処理。
       # 本命なので先に実行し、失敗しても検索スカウトは続行させる（continue-on-error）。

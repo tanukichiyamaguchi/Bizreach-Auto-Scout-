@@ -37,3 +37,6 @@ storage_state.json
 # OS
 .DS_Store
 Thumbs.db
+
+# CI: 当日の送信枠マーカー（actions/cache 用。ローカルでは使わない）
+.bizscout-daily/

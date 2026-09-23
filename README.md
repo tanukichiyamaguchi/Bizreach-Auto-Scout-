@@ -37,7 +37,7 @@ cp .env.example .env
 | `BIZSCOUT_MODEL` | 生成モデル（既定 `claude-opus-5`。コスト重視なら sonnet 系）。**Opus を指定する場合は Opus 5 を使う方針**のため、旧 Opus のモデル名を指定しても `claude-opus-5` に読み替えます |
 | `BIZREACH_EMAIL` / `BIZREACH_PASSWORD` | ビズリーチ採用企業アカウント |
 | `BIZSCOUT_DRY_RUN` | `true` で実送信せず文面入力のみ（推奨） |
-| `BIZSCOUT_MAX_SENDS_PER_RUN` | 1実行あたりの送信上限（暴走防止） |
+| `BIZSCOUT_MAX_SENDS_PER_DAY` | 1日あたりの送信上限（暴走防止。GitHub Actions は1日1回実行） |
 | `BIZSCOUT_SEND_DELAY_MIN/MAX` | 送信間隔（秒）の下限/上限 |
 | `BIZSCOUT_KILL_SWITCH` | このファイルが存在する間は送信を全停止 |
 | `BIZSCOUT_RESEND_AFTER_DAYS` | 初回送信から再送までの日数（既定5） |
@@ -77,7 +77,7 @@ bizscout run-resends        # 期限の到来した再送を送信
 ```
 
 > **本番運用は GitHub Actions（`.github/workflows/scout.yml`）で自動化済み**です。
-> 定期実行は 16:09 / 18:39 JST の2枠で、初回送信・再送をまとめて実行します
+> 定期実行は **毎日 JST 11時台に1回**で、初回送信・再送をまとめて実行します
 > （詳細は `docs/GitHub Actionsで運用.md`）。以下の cron は自前サーバで運用する場合の参考例です。
 
 自前サーバの cron 例:
@@ -179,7 +179,7 @@ cp config/bizreach_selectors.example.yaml config/bizreach_selectors.yaml
 
 - **dry-run**: `BIZSCOUT_DRY_RUN=true` で実送信を停止。
 - **kill switch**: `BIZSCOUT_KILL_SWITCH` のファイルを作成すると即時に送信停止。
-- **送信上限**: `BIZSCOUT_MAX_SENDS_PER_RUN`。
+- **送信上限**: `BIZSCOUT_MAX_SENDS_PER_DAY`（GitHub Actions）／環境変数 `BIZSCOUT_MAX_SENDS_PER_RUN`（自前運用）。
 - **重複防止**: 同一会員番号への初回は二度生成・送信しない（SQLite管理）。
 - **対象条件**: 27歳〜42歳／同一企業2.5年以上／男性／大学卒以上／日本人（日本語ネイティブの可能性が高い）を満たさない（または不明の）候補者は自動送信から除外し「要確認」として記録（`bizscout report`）。レジュメに国籍・母語フィールドが無いため、**外国人は代替シグナルで判定**する（詳細は `src/bizreach_scout/foreign.py`、実例は `tests/test_foreign_profiles.py`）: ①海外の学校卒・高校を含む（学校名が日本語表記でない＝英語表記、カタカナ主体「スタンフォード大学」「カラチ大学」、または国名タグ付き「北京市第一六一中学（中国）」「イギリス コベントリー大学」）、②日本語学校（留学生向け日本語課程）の学歴（「〜日本語学校」「ISI〜」「〜国際交流学園」等）、③日本語ネイティブでない（日本語検定の保有／**語学欄**で「日本語：ビジネス会話レベル」等の非ネイティブ申告／「英語:ネイティブ」「北京語:ネイティブ」等の外国語ネイティブ申告。日本人の「英語:ビジネス／日常会話」は除外しない）、④職務要約・職歴がほとんど英語で記載（日本語文字の割合が極めて低い）、⑤永住権・在留資格・ビザに関する本人の申告（「永住権取得済」「ビザサポート不要」等）、⑥居住地が海外（APIの居住地コードが国内都道府県 J01〜J47 でない）。いずれも `config/scout_rules.yaml` の `exclude_overseas_education` / `exclude_japanese_language_school` / `exclude_non_japanese_native` / `exclude_english_resume` / `exclude_residency_status_mention` / `exclude_overseas_residence` で無効化可能。
 - **人間的な間隔**: 送信間隔・操作間にランダム待機。
