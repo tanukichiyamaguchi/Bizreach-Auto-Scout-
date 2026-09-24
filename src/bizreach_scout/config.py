@@ -15,14 +15,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import ConsultantProfile
 
-# Opus を使うときは Opus 5 を使う、という運用方針。GitHub の Variables などに
-# 旧 Opus のモデル名が残っていても方針が守られるよう、Opus 系の指定は Opus 5 へ
+# Opus を使うときは最新の Opus を使う、という運用方針。GitHub の Variables などに
+# 旧 Opus のモデル名が残っていても方針が守られるよう、Opus 系の指定は最新へ
 # 読み替える（sonnet / haiku 等の指定はコスト選択なのでそのまま尊重する）。
-OPUS_MODEL = "claude-opus-5"
+# 新しい Opus が出たらこの定数だけを更新すれば、既定値・読み替え・doctor の表示が揃う。
+OPUS_MODEL = "claude-opus-5-5"
 
 
 def normalize_model(model: str) -> str:
-    """Opus 系のモデル指定を Opus 5 に揃える。それ以外はそのまま返す。"""
+    """Opus 系のモデル指定を最新の Opus（OPUS_MODEL）に揃える。それ以外はそのまま返す。"""
     m = (model or "").strip()
     if m.startswith("claude-opus-") and m != OPUS_MODEL:
         return OPUS_MODEL
