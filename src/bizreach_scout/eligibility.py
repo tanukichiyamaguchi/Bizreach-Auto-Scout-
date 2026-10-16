@@ -6,7 +6,7 @@
 完全自動送信からは除外して「要確認」リストへ回す。
 
 勤務条件の判定（詳細は work_conditions.py）:
-- 転勤NG / 出張不可 / 残業なし希望 / 在宅勤務希望
+- 既定で 出張不可 / 残業なし希望 / 在宅勤務希望（転勤NGは自社求人が「転勤なし」のため既定で無効）
   （本人が希望として書いた欄のみを走査。「リモート可」等の“許容”は除外しない）
 
 外国人の判定（詳細は foreign.py）:
@@ -29,6 +29,7 @@ from .foreign import (
     japanese_listed_as_non_native,
 )
 from .models import Candidate, Education, EligibilityResult, Gender
+from .work_conditions import DEFAULT_SIGNALS as DEFAULT_WORK_CONDITION_SIGNALS
 from .work_conditions import unwanted_work_conditions
 
 _EDU_MAP = {
@@ -149,7 +150,8 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
             candidate.desired_other_full or candidate.desired_other,
             candidate.desired_locations,
         ])
-        failed.extend(unwanted_work_conditions(wish))
+        failed.extend(unwanted_work_conditions(
+            wish, cfg.get("unwanted_work_conditions", DEFAULT_WORK_CONDITION_SIGNALS)))
 
     # --- 同一企業での勤続年数 -------------------------------------------------
     min_years = cfg.get("min_same_company_years", 2.5)

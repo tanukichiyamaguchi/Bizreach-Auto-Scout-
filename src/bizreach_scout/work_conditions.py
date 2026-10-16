@@ -1,11 +1,21 @@
-"""勤務条件の希望による除外判定（転勤NG・出張不可・残業なし希望・在宅勤務希望）。
+"""勤務条件の希望による除外判定（出張不可・残業なし希望・在宅勤務希望／転勤NGは任意）。
 
-運用方針（2026-10 運用者指示）: 次のいずれかを表明している候補者にはスカウトを送らない。
+運用方針（2026-10 運用者指示）: 次を表明している候補者にはスカウトを送らない。
+どれを有効にするかは ``config/scout_rules.yaml`` の ``unwanted_work_conditions`` で選ぶ。
 
-1. 転勤NG       … 転勤・転居を伴う異動を避けたい
-2. 出張不可     … 出張を避けたい（自社求人は「全国クライアント医院へ月15〜20件の出張あり」）
-3. 残業なし希望 … 残業のない／ごく少ない職場を希望
-4. 在宅勤務希望 … 在宅・リモートでの勤務を希望
+===============  ====================================================  ========
+キー             内容                                                  既定
+===============  ====================================================  ========
+business_trip    出張不可（自社求人は全国クライアント医院へ月15〜20件）  有効
+overtime         残業なし希望（残業のない／ごく少ない職場を希望）        有効
+remote_work      在宅勤務希望（在宅・リモートでの勤務を希望）            有効
+relocation       転勤NG（転勤・転居を伴う異動を避けたい）               **無効**
+===============  ====================================================  ========
+
+``relocation`` だけ既定で無効なのは、**自社求人が「転勤なし」だから**（``config/company.yaml``）。
+転勤を避けたい候補者はむしろ相性が良く、文面テンプレートもそれを訴求材料として使う
+（``config/prompt_template.md``: 候補者が「転勤なし」を希望 → 当社は転勤なしである事実を挙げる）。
+判定ロジック自体は残してあるので、方針が変われば設定に ``relocation`` を足すだけでよい。
 
 **「可（許容）」と「希望・不可（意思表示）」を必ず区別する**（運用者の明示指示）。
 「リモート可」「転勤可能」「出張は厭いません」は“それでも構わない”であって希望ではないため
@@ -21,6 +31,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 # --- 話題語（表記ゆれを含む）-------------------------------------------------
 _TOPIC_PATTERNS: dict[str, str] = {
@@ -160,21 +171,37 @@ def _wants_remote(text: str) -> bool:
     return False
 
 
-# 判定結果に対応する「対象外の理由」。eligibility.py が failed に積む文面。
-_REASONS = {
-    "転勤": "転勤を避けたい希望のため対象外（転勤NG）",
-    "出張": "出張を避けたい希望のため対象外（出張不可・自社求人は出張あり）",
-    "残業": "残業のない職場を希望のため対象外（残業なし希望）",
-    "在宅": "在宅・リモート勤務を希望のため対象外（在宅勤務希望）",
+# 設定キー → (内部の話題名, 対象外の理由の文面)。理由は eligibility.py が failed に積む。
+_SIGNALS: dict[str, tuple[str, str]] = {
+    "relocation": ("転勤", "転勤を避けたい希望のため対象外（転勤NG）"),
+    "business_trip": ("出張", "出張を避けたい希望のため対象外（出張不可・自社求人は出張あり）"),
+    "overtime": ("残業", "残業のない職場を希望のため対象外（残業なし希望）"),
+    "remote_work": ("在宅", "在宅・リモート勤務を希望のため対象外（在宅勤務希望）"),
 }
+# 設定で選べるキーの一覧（rules.py の検証とドキュメントの単一情報源）。
+SIGNAL_KEYS: tuple[str, ...] = tuple(_SIGNALS)
+# 既定で有効にするキー。転勤NGは自社求人が「転勤なし」のため外している（冒頭の表を参照）。
+DEFAULT_SIGNALS: tuple[str, ...] = ("business_trip", "overtime", "remote_work")
 
 
-def unwanted_work_conditions(text: str | None) -> list[str]:
-    """希望欄のテキストから、該当する勤務条件の理由を並べて返す（無ければ空）。"""
+def unwanted_work_conditions(text: str | None,
+                             signals: Iterable[str] | None = None) -> list[str]:
+    """希望欄のテキストから、該当する勤務条件の理由を並べて返す（無ければ空）。
+
+    ``signals`` に設定キー（``SIGNAL_KEYS``）を渡すと、その判定だけを行う。
+    省略時は**全ての判定**を行う（判定ロジック自体のテスト・調査用）。
+    運用で実際に使う組み合わせは ``DEFAULT_SIGNALS`` で、eligibility.py が設定から渡す。
+    """
     s = _normalize(text)
     if not s:
         return []
-    found = [t for t in ("転勤", "出張", "残業") if _refuses(t, s)]
-    if _wants_remote(s):
-        found.append("在宅")
-    return [_REASONS[t] for t in found]
+    enabled = SIGNAL_KEYS if signals is None else tuple(signals)
+    reasons: list[str] = []
+    for key in SIGNAL_KEYS:          # 理由の並び順を設定の書き方に依存させない
+        if key not in enabled:
+            continue
+        topic, reason = _SIGNALS[key]
+        hit = _wants_remote(s) if topic == "在宅" else _refuses(topic, s)
+        if hit:
+            reasons.append(reason)
+    return reasons

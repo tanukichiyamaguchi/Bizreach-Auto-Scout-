@@ -1,6 +1,7 @@
 """勤務条件の希望による除外（work_conditions.py）のテスト。
 
-運用者指示（2026-10）: 転勤NG・出張不可・残業なし希望・在宅勤務希望は対象外。
+運用者指示（2026-10）: 出張不可・残業なし希望・在宅勤務希望は対象外。
+転勤NG は判定は持つが**既定では除外しない**（自社求人が「転勤なし」のため相性が良い）。
 ただし「リモート可」のような**許容**の表明は除外しない（明確な在宅勤務希望のみ）。
 
 NO_MATCH / MATCH は、日本の中途レジュメに実際に書かれる言い回しを網羅した回帰用コーパス。
@@ -294,9 +295,9 @@ def test_multiple_signals_are_all_reported():
 
 @pytest.mark.parametrize("field", ["work_style", "desired_other", "desired_locations"])
 def test_excluded_from_each_preference_field(field: str):
-    result = check_eligibility(make_candidate(**{field: "転勤は不可です"}))
+    result = check_eligibility(make_candidate(**{field: "出張は不可です"}))
     assert not result.eligible
-    assert any("転勤NG" in r for r in result.failed)
+    assert any("出張不可" in r for r in result.failed)
 
 
 def test_career_text_is_not_scanned():
@@ -310,11 +311,11 @@ def test_career_text_is_not_scanned():
 
 def test_untruncated_text_is_used_for_judgement():
     """desired_other は400字で切り詰められるため、判定には全文(desired_other_full)を使う。"""
-    long_wish = "あ" * 500 + "転勤は不可です"
+    long_wish = "あ" * 500 + "出張は不可です"
     c = make_candidate(desired_other=long_wish[:400] + "…", desired_other_full=long_wish)
     result = check_eligibility(c)
     assert not result.eligible
-    assert any("転勤NG" in r for r in result.failed)
+    assert any("出張不可" in r for r in result.failed)
 
 
 def test_can_be_disabled_via_config():
@@ -323,10 +324,73 @@ def test_can_be_disabled_via_config():
     rules = scout_rules()
     custom = {**rules, "eligibility": {**rules["eligibility"],
                                        "exclude_unwanted_work_conditions": False}}
-    result = check_eligibility(make_candidate(work_style="転勤なし"), rules=custom)
-    assert not any("転勤NG" in r for r in result.failed)
+    result = check_eligibility(make_candidate(work_style="出張なし"), rules=custom)
+    assert not any("出張不可" in r for r in result.failed)
 
 
 def test_remote_ok_candidate_still_eligible():
     """運用者指示: 「リモート可」では除外しない。"""
     assert check_eligibility(make_candidate(work_style="リモート可、フレックス")).eligible
+
+
+# --- 有効にする判定の選択（既定では転勤NGを除外しない）--------------------------
+
+def test_relocation_is_not_excluded_by_default():
+    """自社求人は「転勤なし」なので、転勤を避けたい候補者は対象のまま（運用者判断）。"""
+    from bizreach_scout.config import scout_rules
+
+    assert "relocation" not in scout_rules()["eligibility"]["unwanted_work_conditions"]
+    assert check_eligibility(make_candidate(work_style="転勤なし")).eligible
+    assert check_eligibility(make_candidate(desired_other="転勤は不可です。")).eligible
+
+
+def test_other_three_are_excluded_by_default():
+    for wish, label in [("出張なし", "出張不可"),
+                        ("残業なし", "残業なし希望"),
+                        ("フルリモート", "在宅勤務希望")]:
+        result = check_eligibility(make_candidate(work_style=wish))
+        assert not result.eligible, wish
+        assert any(label in r for r in result.failed), wish
+
+
+def test_relocation_only_candidate_keeps_other_reasons():
+    """転勤NGと出張不可を両方書いている人は、出張だけを理由に除外される。"""
+    result = check_eligibility(make_candidate(desired_other="転勤は不可です。出張も不可です。"))
+    assert not result.eligible
+    assert any("出張不可" in r for r in result.failed)
+    assert not any("転勤NG" in r for r in result.failed)
+
+
+def test_signals_can_be_selected():
+    """判定ロジック自体は転勤も持っている（設定に足せば有効になる）。"""
+    from bizreach_scout.work_conditions import DEFAULT_SIGNALS, SIGNAL_KEYS
+
+    assert set(SIGNAL_KEYS) == {"relocation", "business_trip", "overtime", "remote_work"}
+    assert "relocation" not in DEFAULT_SIGNALS
+    assert unwanted_work_conditions("転勤なし", ["relocation"])
+    assert unwanted_work_conditions("転勤なし", DEFAULT_SIGNALS) == []
+    # 省略時は全判定（コーパスの回帰テストはこの形で全シグナルを突く）。
+    assert unwanted_work_conditions("転勤なし")
+
+
+def test_relocation_can_be_enabled_via_config():
+    from bizreach_scout.config import scout_rules
+
+    rules = scout_rules()
+    custom = {**rules, "eligibility": {
+        **rules["eligibility"],
+        "unwanted_work_conditions": ["relocation", "business_trip", "overtime", "remote_work"],
+    }}
+    result = check_eligibility(make_candidate(work_style="転勤なし"), rules=custom)
+    assert any("転勤NG" in r for r in result.failed)
+
+
+def test_unknown_signal_key_is_rejected():
+    """タイポで条件が無言で消えないよう、未知のキーは起動時に落とす。"""
+    import pytest as _pytest
+
+    from bizreach_scout.rules import validate_rules
+
+    raw = {"eligibility": {"unwanted_work_conditions": ["business_trip", "overtim"]}}
+    with _pytest.raises(Exception, match="unwanted_work_conditions"):
+        validate_rules(raw)

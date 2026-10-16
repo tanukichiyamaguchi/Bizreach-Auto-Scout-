@@ -566,19 +566,19 @@ def test_iter_candidate_ids_stops_when_results_exhausted():
 def test_desired_other_keeps_untruncated_copy_for_judgement():
     """プロンプト用は400字で切り詰めるが、判定用は全文を残す。
 
-    切り詰めた文字列だけだと、401字目以降に書かれた「転勤は不可です」等を
+    切り詰めた文字列だけだと、401字目以降に書かれた「出張は不可です」等を
     勤務条件の判定が取りこぼす（2026-10 に実測で確認）。
     """
     from bizreach_scout.bizreach.api import _DESIRED_OTHER_MAX
 
-    long_wish = "あ" * 500 + "転勤は不可です"
+    long_wish = "あ" * 500 + "出張は不可です"
     resume = _resume()
     resume["desiredConditions"] = {"otherDesiredText": long_wish}
     c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
     assert len(c.desired_other) == _DESIRED_OTHER_MAX + 1   # 末尾の「…」の分
     assert c.desired_other_full == long_wish
-    assert "転勤は不可です" not in c.desired_other
-    assert "転勤は不可です" in c.desired_other_full
+    assert "出張は不可です" not in c.desired_other
+    assert "出張は不可です" in c.desired_other_full
     assert not check_eligibility(c).eligible
 
 
@@ -608,12 +608,21 @@ def test_work_style_labels_are_logged_once(caplog):
 
 
 def test_work_style_label_excludes_candidate():
-    """「転勤なし」を選んでいる候補者は勤務条件で対象外になる。"""
+    """「出張なし」を選んでいる候補者は勤務条件で対象外になる。"""
+    resume = _resume()
+    resume["desiredConditions"] = {"workStyles": [{"ja": "出張なし"}]}
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.work_style == "出張なし"
+    assert any("出張不可" in r for r in check_eligibility(c).failed)
+
+
+def test_relocation_work_style_label_does_not_exclude():
+    """自社求人は「転勤なし」なので、転勤を避けたい希望では除外しない（既定）。"""
     resume = _resume()
     resume["desiredConditions"] = {"workStyles": [{"ja": "転勤なし"}]}
     c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
     assert c.work_style == "転勤なし"
-    assert any("転勤NG" in r for r in check_eligibility(c).failed)
+    assert check_eligibility(c).eligible
 
 
 def test_remote_ok_work_style_does_not_exclude():

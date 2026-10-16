@@ -29,13 +29,18 @@ eligibility:
   # ⑥ 居住地が海外（APIの居住地コードが国内の都道府県 J01〜J47 でない）。
   exclude_overseas_residence: true
   # 勤務条件の希望が自社求人と合わない人は対象外（2026-10 運用者指示）。
-  #   ① 転勤NG  ② 出張不可  ③ 残業なし希望  ④ 在宅勤務希望
   # 判定は**本人が希望として書いた欄のみ**（興味のある働き方／その他の希望／希望勤務地）。
   # 職務要約・自己PR・職務経歴は走査しない（「残業を月40h→10hへ削減」「在宅勤務制度を導入」
   # のような経歴・実績の記述で、人事・コンサル経験者を体系的に誤除外するため）。
   # 「可（許容）」と「希望・不可（意思表示）」は区別する: 「リモート可」「転勤可能」
   # 「出張は厭いません」は除外しない。詳細は src/bizreach_scout/work_conditions.py。
   exclude_unwanted_work_conditions: true
+  # 有効にする判定。転勤NG(relocation)は**既定で外している**: 自社求人が「転勤なし」のため
+  # （company.yaml）、転勤を避けたい候補者はむしろ相性が良く、文面テンプレートも
+  # それを訴求材料として使う。方針が変われば relocation を足すだけでよい。
+  #   business_trip … 出張不可      overtime    … 残業なし希望
+  #   remote_work   … 在宅勤務希望  relocation  … 転勤NG（既定で無効）
+  unwanted_work_conditions: [business_trip, overtime, remote_work]
   # 直近1年以内の転職（現職の在籍が1年未満）は対象外。0/未設定で無効。
   min_current_tenure_years: 1
   # 転職回数が多い人は対象外（この回数「以上」で除外。転職回数 = 勤務先数 - 1）。
