@@ -115,6 +115,10 @@ class Candidate(BaseModel):
     work_style: str = ""
     desired_locations: str = ""  # 希望勤務地
     desired_other: str = ""  # その他の希望（本人が自由記述で書いたもの）
+    # 上の desired_other はプロンプトに載せるため 400 字で切り詰める。勤務条件の判定
+    # （転勤NG・出張不可等）が 401 字目以降の記述を取りこぼさないよう、判定専用に
+    # 未切り詰めの全文を持つ（文面生成には使わない）。
+    desired_other_full: str = ""
 
     summary: str = ""  # 自己PR・職務要約
     raw_profile: str = ""  # 取得した生テキスト（プロンプトのフォールバックに使用）

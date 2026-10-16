@@ -5,6 +5,10 @@
 いずれかを満たさない（または判定不能）の場合は eligible=False とし、
 完全自動送信からは除外して「要確認」リストへ回す。
 
+勤務条件の判定（詳細は work_conditions.py）:
+- 転勤NG / 出張不可 / 残業なし希望 / 在宅勤務希望
+  （本人が希望として書いた欄のみを走査。「リモート可」等の“許容”は除外しない）
+
 外国人の判定（詳細は foreign.py）:
 - 海外の学校卒・高校を含む（overseas_education）
 - 日本語学校（留学生向け日本語課程）の学歴（japanese_language_school）
@@ -25,6 +29,7 @@ from .foreign import (
     japanese_listed_as_non_native,
 )
 from .models import Candidate, Education, EligibilityResult, Gender
+from .work_conditions import unwanted_work_conditions
 
 _EDU_MAP = {
     "high_school": Education.high_school,
@@ -134,6 +139,17 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
     if cfg.get("exclude_overseas_residence", True) and candidate.overseas_residence:
         where = f"（{candidate.residence}）" if candidate.residence else ""
         failed.append(f"居住地が海外{where}のため対象外（海外在住・外国人の可能性）")
+
+    # --- 勤務条件の希望が自社求人と合わない（転勤NG/出張不可/残業なし/在宅希望）----
+    # 走査するのは本人が「希望」として書いた欄だけ（職務要約・自己PR は見ない）。
+    # desired_other はプロンプト用に400字で切り詰められるため、判定には全文を使う。
+    if cfg.get("exclude_unwanted_work_conditions", True):
+        wish = "\n".join([
+            candidate.work_style,
+            candidate.desired_other_full or candidate.desired_other,
+            candidate.desired_locations,
+        ])
+        failed.extend(unwanted_work_conditions(wish))
 
     # --- 同一企業での勤続年数 -------------------------------------------------
     min_years = cfg.get("min_same_company_years", 2.5)

@@ -220,7 +220,19 @@ def _pick_desired(desired: dict, keys: tuple[str, ...]) -> str:
 
 
 _DESIRED_FIELDS = ("work_style", "desired_jobs", "desired_industries",
-                   "desired_locations", "desired_other")
+                   "desired_locations", "desired_other", "desired_other_full")
+
+# 「興味のある働き方」の選択肢は enum のため、実際に現れるラベルを各1回だけログに出す
+# （値は選択肢名のみで個人を特定しない）。勤務条件による除外（転勤NG・在宅勤務希望等）が
+# 実データのラベルを取りこぼしていないかを、運用ログだけで点検できるようにする。
+_logged_work_style_labels: set[str] = set()
+
+
+def _log_work_style_labels(work_style: str) -> None:
+    for label in (x.strip() for x in (work_style or "").split("、")):
+        if label and label not in _logged_work_style_labels:
+            logger.info("興味のある働き方の選択肢を検出: %s", label)
+            _logged_work_style_labels.add(label)
 
 
 def _extract_desired(resume: dict) -> dict[str, str]:
@@ -239,11 +251,14 @@ def _extract_desired(resume: dict) -> dict[str, str]:
         _logged_desired_keys = True
     if not isinstance(desired, dict):
         return dict.fromkeys(_DESIRED_FIELDS, "")
-    other = _pick_desired(desired, _DESIRED_OTHER_KEYS)
-    if len(other) > _DESIRED_OTHER_MAX:
-        other = other[:_DESIRED_OTHER_MAX] + "…"
+    other_full = _pick_desired(desired, _DESIRED_OTHER_KEYS)
+    other = (other_full[:_DESIRED_OTHER_MAX] + "…"
+             if len(other_full) > _DESIRED_OTHER_MAX else other_full)
+    work_style = _pick_desired(desired, _WORK_STYLE_KEYS)
+    _log_work_style_labels(work_style)
     return {
-        "work_style": _pick_desired(desired, _WORK_STYLE_KEYS),
+        "work_style": work_style,
+        "desired_other_full": other_full,
         "desired_jobs": _pick_desired(desired, _DESIRED_JOB_KEYS),
         "desired_industries": _pick_desired(desired, _DESIRED_INDUSTRY_KEYS),
         "desired_locations": _pick_desired(desired, _DESIRED_LOCATION_KEYS),
@@ -513,6 +528,7 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         desired_industries=desired["desired_industries"],
         desired_locations=desired["desired_locations"],
         desired_other=desired["desired_other"],
+        desired_other_full=desired["desired_other_full"],
         summary=summary,
         raw_profile=raw_profile,
         foreign_text=foreign_text,

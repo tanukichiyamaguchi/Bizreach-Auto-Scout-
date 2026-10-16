@@ -559,3 +559,66 @@ def test_iter_candidate_ids_stops_when_results_exhausted():
     got = list(api.iter_candidate_ids(URL, max_candidates=10, skip_mrccids={"A"}))
     assert got == ["B", "C", "D"]
     assert requested == [1, 2]
+
+
+# --- 希望条件: 判定用の未切り詰めテキストと働き方ラベルのログ ---------------------
+
+def test_desired_other_keeps_untruncated_copy_for_judgement():
+    """プロンプト用は400字で切り詰めるが、判定用は全文を残す。
+
+    切り詰めた文字列だけだと、401字目以降に書かれた「転勤は不可です」等を
+    勤務条件の判定が取りこぼす（2026-10 に実測で確認）。
+    """
+    from bizreach_scout.bizreach.api import _DESIRED_OTHER_MAX
+
+    long_wish = "あ" * 500 + "転勤は不可です"
+    resume = _resume()
+    resume["desiredConditions"] = {"otherDesiredText": long_wish}
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert len(c.desired_other) == _DESIRED_OTHER_MAX + 1   # 末尾の「…」の分
+    assert c.desired_other_full == long_wish
+    assert "転勤は不可です" not in c.desired_other
+    assert "転勤は不可です" in c.desired_other_full
+    assert not check_eligibility(c).eligible
+
+
+def test_short_desired_other_is_not_truncated():
+    resume = _resume()
+    resume["desiredConditions"] = {"otherDesiredText": "専門性を高められる環境を希望します。"}
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.desired_other == c.desired_other_full == "専門性を高められる環境を希望します。"
+
+
+def test_work_style_labels_are_logged_once(caplog):
+    """働き方の選択肢は enum のため、実データのラベルを各1回だけログに出す。"""
+    import logging
+
+    from bizreach_scout.bizreach import api
+
+    api._logged_work_style_labels.clear()
+    resume = _resume()
+    resume["desiredConditions"] = {"workStyles": [{"ja": "フレックス"}, {"ja": "副業可"}]}
+    with caplog.at_level(logging.INFO, logger="bizscout"):
+        resume_to_candidate(resume, now=datetime(2026, 7, 1))
+        resume_to_candidate(resume, now=datetime(2026, 7, 1))  # 2回目は出さない
+    logged = [r.getMessage() for r in caplog.records
+              if "興味のある働き方の選択肢" in r.getMessage()]
+    assert logged == ["興味のある働き方の選択肢を検出: フレックス",
+                      "興味のある働き方の選択肢を検出: 副業可"]
+
+
+def test_work_style_label_excludes_candidate():
+    """「転勤なし」を選んでいる候補者は勤務条件で対象外になる。"""
+    resume = _resume()
+    resume["desiredConditions"] = {"workStyles": [{"ja": "転勤なし"}]}
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert c.work_style == "転勤なし"
+    assert any("転勤NG" in r for r in check_eligibility(c).failed)
+
+
+def test_remote_ok_work_style_does_not_exclude():
+    """「リモート可」は許容であって在宅勤務希望ではない（運用者の明示指示）。"""
+    resume = _resume()
+    resume["desiredConditions"] = {"workStyles": [{"ja": "リモートワーク可"}]}
+    c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
+    assert check_eligibility(c).eligible
