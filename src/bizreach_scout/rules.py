@@ -15,7 +15,10 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .work_conditions import DEFAULT_SIGNALS as DEFAULT_WORK_CONDITION_SIGNALS
+from .work_conditions import SIGNAL_KEYS as WORK_CONDITION_SIGNAL_KEYS
 
 _Forbid = ConfigDict(extra="forbid")
 
@@ -42,6 +45,21 @@ class EligibilityRules(BaseModel):
     exclude_english_resume: bool = True
     exclude_residency_status_mention: bool = True
     exclude_overseas_residence: bool = True
+    exclude_unwanted_work_conditions: bool = True
+    # 有効にする勤務条件の判定（work_conditions.SIGNAL_KEYS のいずれか）。
+    unwanted_work_conditions: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_WORK_CONDITION_SIGNALS))
+
+    @field_validator("unwanted_work_conditions")
+    @classmethod
+    def _known_work_condition_signals(cls, v: list[str]) -> list[str]:
+        """未知のキー（タイポ）を起動時に落とす。黙って条件が消えるのを防ぐ。"""
+        unknown = [x for x in v if x not in WORK_CONDITION_SIGNAL_KEYS]
+        if unknown:
+            raise ValueError(
+                f"unwanted_work_conditions に未知のキー {unknown} があります。"
+                f"使えるのは {list(WORK_CONDITION_SIGNAL_KEYS)} です。")
+        return v
     # None/未設定なら直近転職チェック無効（"絶対値が入っていれば有効"の従来意味を保つ）。
     min_current_tenure_years: int | None = 1
     job_changes_exclude: list[JobChangeBracket] = Field(default_factory=list)
