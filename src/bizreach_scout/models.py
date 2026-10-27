@@ -65,7 +65,8 @@ class EmploymentSegment(BaseModel):
     """社内での役職・部署・プロジェクトごとの期間（レジュメの companyCareers 1件分）。"""
 
     name: str = ""                 # 役職・部署・プロジェクト名
-    years: float | None = None     # その期間の長さ（年）。期間不明は None
+    years: float | None = None     # その期間の長さ（年・表示用に0.1年で丸め）。期間不明は None
+    months: int | None = None      # 同じ長さを月数で（割合の計算用。丸め誤差を出さない）
 
 
 class Employment(BaseModel):
@@ -76,6 +77,7 @@ class Employment(BaseModel):
     # 在籍年数 = 入社〜退職（在籍中は〜現在）。退職済みの会社も「入社〜今日」で数えていた
     # 不具合（2014/4〜2018/3 の前職が12年扱い）を 2026-10 に修正した。
     years: float | None = None
+    months: int | None = None      # 同じ長さを月数で（割合の計算用）
     industry: str = ""
     is_current: bool = False       # 在籍中（退職年月が無い）か
     # 雇用形態を表すフィールドがレジュメにあればその値（ビズリーチの入力欄に雇用形態は
@@ -115,6 +117,10 @@ class Candidate(BaseModel):
     current_company: str = ""
     current_title: str = ""
     current_tenure_years: float | None = None  # 現職の在籍年数
+    # 直近の勤務先に入社してから今日までの年数（「直近1年以内の転職」の判定用）。
+    # 在籍中なら current_tenure_years と同じ。離職中の人は、最後の勤務先の在籍期間ではなく
+    # 入社からの経過で見る（以前からの判定の意味を保つ。None なら current_tenure_years を使う）。
+    years_since_last_job_change: float | None = None
     total_experience_years: float | None = None
 
     industry: str = ""

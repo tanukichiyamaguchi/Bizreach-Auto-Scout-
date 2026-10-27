@@ -736,3 +736,32 @@ def test_self_employed_current_job_excluded_via_api():
     resume["companyExperiences"][0]["companyName"] = {"ja": "フリーランス"}
     c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
     assert any("現職が個人事業主" in r for r in check_eligibility(c).failed)
+
+
+def test_unemployed_candidate_is_not_flagged_as_recent_job_change():
+    """離職中の人は「直近1年以内の転職」を最後の入社からの経過で見る（以前の判定の意味を保つ）。
+
+    最後の勤務先の在籍が半年でも、入社が何年も前なら直近の転職ではない。
+    """
+    resume = _resume()
+    resume["companyExperiences"] = [
+        {"companyName": {"ja": "最終職株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2019, "month": 1}, "to": {"year": 2019, "month": 6}},
+         "employmentStatus": "Resigned"},
+        {"companyName": {"ja": "前職株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2012, "month": 4}, "to": {"year": 2018, "month": 12}},
+         "employmentStatus": "Resigned"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
+    assert c.current_tenure_years == 0.5            # 最後の勤務先の在籍期間（文面生成用）
+    assert c.years_since_last_job_change == 7.8     # 直近の転職からの経過（判定用）
+    assert not any("直近" in r for r in check_eligibility(c).failed)
+
+
+def test_resigned_job_without_end_date_has_unknown_length():
+    """退職済みなのに退職年月が無い職歴は、今日まで数えると同じ不具合になるので不明にする。"""
+    resume = _resume()
+    resume["companyExperiences"][1]["period"]["to"] = None   # ABC商事（Resigned）
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
+    abc = next(e for e in c.employments if e.company == "株式会社ABC商事")
+    assert abc.years is None and abc.months is None

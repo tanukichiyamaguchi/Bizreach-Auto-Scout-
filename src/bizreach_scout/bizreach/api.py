@@ -382,12 +382,14 @@ def _years_since(period_from: dict | None, now: datetime | None = None) -> float
     return max(0.0, round((now.year - start[0]) + (now.month - start[1]) / 12.0, 1))
 
 
-def _period_years(period: dict | None, now: datetime | None = None) -> float | None:
-    """在籍期間の長さ（年）。退職年月があれば入社〜退職、無ければ入社〜現在。
+def _period_months(period: dict | None, current: bool,
+                   now: datetime | None = None) -> int | None:
+    """在籍期間の長さ（月数）。退職年月があれば入社〜退職、在籍中なら入社〜現在。
 
     以前は退職年月を無視して全社を「入社〜今日」で数えており、2014/4〜2018/3 の前職が
     12年扱いになっていた（同一企業での勤続判定が甘くなり、文面生成にも誤った年数が
-    渡っていた）。退職済みは開始月・終了月を含めて数える（2021/4〜2023/9 = 2.5年）。
+    渡っていた）。退職済みは開始月・終了月を含めて数える（2021/4〜2023/9 = 30か月）。
+    退職済みなのに退職年月が無いものは、今日まで数えると同じ誤りになるので不明（None）にする。
     """
     if not isinstance(period, dict):
         return None
@@ -396,9 +398,21 @@ def _period_years(period: dict | None, now: datetime | None = None) -> float | N
         return None
     end = _year_month(period.get("to"), 12)
     if end is None:
-        return _years_since(period.get("from"), now)
-    months = (end[0] - start[0]) * 12 + (end[1] - start[1]) + 1
-    return max(0.0, round(months / 12.0, 1))
+        if not current:
+            return None
+        now = now or datetime.now()
+        return max(0, (now.year - start[0]) * 12 + (now.month - start[1]))
+    return max(0, (end[0] - start[0]) * 12 + (end[1] - start[1]) + 1)
+
+
+def _years(months: int | None) -> float | None:
+    return None if months is None else round(months / 12.0, 1)
+
+
+def _period_years(period: dict | None, now: datetime | None = None,
+                  current: bool = True) -> float | None:
+    """在籍期間の長さ（年・0.1年で丸め）。期間の数え方は _period_months を参照。"""
+    return _years(_period_months(period, current, now))
 
 
 def _is_current(ce: dict) -> bool:
@@ -458,15 +472,19 @@ def _employment_type(ce: dict) -> str:
     return ""
 
 
-def _segments(ce: dict, now: datetime | None) -> list[EmploymentSegment]:
+def _segments(ce: dict, now: datetime | None, company_current: bool) -> list[EmploymentSegment]:
     """社内の役職・部署ごとの期間（companyCareers）。名前は ja→en の順で取る。"""
     out: list[EmploymentSegment] = []
     for cc in ce.get("companyCareers") or []:
         if not isinstance(cc, dict):
             continue
         name = _ja(cc.get("name")) or _en(cc.get("name"))
-        if name:
-            out.append(EmploymentSegment(name=name, years=_period_years(cc.get("period"), now)))
+        if not name:
+            continue
+        # 終了年月の無い社内経歴は、会社に在籍中なら現在まで、退職済みなら不明。
+        current = company_current and (cc.get("isPresent") is not False)
+        months = _period_months(cc.get("period"), current, now)
+        out.append(EmploymentSegment(name=name, years=_years(months), months=months))
     return out
 
 
@@ -542,21 +560,26 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     prior: list[str] = []
     career_blocks: list[str] = []
     _log_career_structure(resume)
+    since_last_change = None
     for i, ce in enumerate(companies):
         name = _ja(ce.get("companyName"))
         title = _ja(ce.get("positionName"))
-        yrs = _period_years(ce.get("period"), now)
+        current = _is_current(ce)
+        months = _period_months(ce.get("period"), current, now)
+        yrs = _years(months)
         if i == 0:
             current_company, current_title, current_tenure = name, title, yrs
+            # 「直近1年以内の転職」は、離職中でも直近の入社からの経過で見る（以前の判定の意味を保つ）。
+            since_last_change = _years_since((ce.get("period") or {}).get("from"), now)
         else:
             if name:
                 prior.append(name)
         if name:
             employments.append(Employment(
-                company=name, title=title, years=yrs, industry="",
-                is_current=_is_current(ce),
+                company=name, title=title, years=yrs, months=months, industry="",
+                is_current=current,
                 employment_type=_employment_type(ce),
-                segments=_segments(ce, now),
+                segments=_segments(ce, now, current),
             ))
         block = _career_text(ce)
         if name or block:
@@ -627,6 +650,7 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         current_company=current_company,
         current_title=current_title,
         current_tenure_years=current_tenure,
+        years_since_last_job_change=since_last_change,
         prior_companies=prior,
         employments=employments,
         job_function=current_title,

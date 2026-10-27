@@ -170,7 +170,7 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
         if limit is None:
             continue
         ratio = ratio_fn(candidate)
-        if ratio is not None and ratio >= limit:
+        if ratio is not None and ratio >= limit - 1e-9:
             failed.append(f"キャリアの{ratio:.0%}が{label}のため対象外（{limit:.0%}以上）")
 
     # --- 同一企業での勤続年数 -------------------------------------------------
@@ -185,7 +185,9 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
     # 現職在籍が min_current_tenure_years 未満 = 直近に転職した人として除外。
     min_cur = cfg.get("min_current_tenure_years")
     if min_cur:
-        cur = candidate.current_tenure_years
+        cur = (candidate.years_since_last_job_change
+               if candidate.years_since_last_job_change is not None
+               else candidate.current_tenure_years)
         if cur is None:
             # 現職在籍が不明 = 直近に転職したか判定不能。過去在籍から max_single_tenure が
             # 取れて「勤続年数が不明」で拾えない場合のみ、判定不能→要確認として回す

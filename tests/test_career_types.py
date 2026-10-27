@@ -497,3 +497,146 @@ def test_ratio_threshold_is_validated():
 def test_role_only_helper():
     assert is_factory_role("生産技術部")
     assert not is_factory_role("経営企画部")
+
+
+# --- レビューで見つかった誤除外・取りこぼしの実例（2026-10）-----------------------
+# 役職欄には顧客層・事業名・担当業務として同じ語が頻出する。自社が欲しい医療系コンサル・
+# 金融/SaaS の営業・人材業界の人を「現職が個人事業主」で落とさないことを固定する。
+NOT_SELF_EMPLOYED_REVIEW = [
+    ("株式会社日本経営", "医業コンサルタント（承継・開業支援）"),
+    ("株式会社メディカルサポート", "医療機関向けコンサルタント（M&A・開業支援）"),
+    ("オリンパスメディカル株式会社", "個人開業医担当 営業"),
+    ("株式会社ABC", "個人開業医向けコンサルティング営業"),
+    ("株式会社X", "独立開業支援コンサルタント"),
+    ("株式会社X", "フランチャイズ開発（独立・開業支援）"),
+    ("株式会社マネーフォワード", "個人事業主・中小企業向けセールス"),
+    ("株式会社みずほ銀行", "個人事業主担当 融資営業"),
+    ("株式会社freee", "個人事業主の確定申告サポート リーダー"),
+    ("株式会社X", "個人事業本部 営業企画部"),
+    ("東京海上日動火災保険株式会社", "代理店営業（個人代理店担当）"),
+    ("株式会社X", "個人経営店向けPOS営業"),
+    ("株式会社X信用金庫", "自営業者・中小企業担当 融資課"),
+    ("株式会社X", "マーケティングマネージャー（業務委託から正社員登用）"),
+    ("株式会社X", "エンジニアリングマネージャー（フリーランスを経て正社員入社）"),
+    ("株式会社ABC（2019年に個人事業から法人化）", "代表取締役"),
+    ("合同会社X（フリーランスから法人成り）", "代表社員"),
+    ("株式会社X", "代表取締役（個人事業として創業後、法人化）"),
+    ("レバテック株式会社", "レバテックフリーランス 法人営業"),
+    ("株式会社X", "フリーランスエンジニアのキャリアアドバイザー"),
+    ("株式会社X", "人事部 フリーランス・副業人材活用担当"),
+    ("株式会社X", "購買部 業務委託・派遣管理"),
+    ("株式会社X", "BPO（業務委託）事業部 営業"),
+    ("Lancers Inc.", "Business Development, Freelance Platform"),
+    ("鈴木税理士事務所", "副所長"),
+    ("鈴木税理士事務所", "所長代理"),
+    ("鈴木税理士事務所", "経営者支援コンサルタント"),
+    ("山田会計事務所", "医業コンサルタント（開業支援担当）"),
+    ("やまだクリニック", "副院長"),
+    ("やまだクリニック", "院長秘書"),
+    ("さくら内科クリニック", "院長補佐（経営企画）"),
+    ("三菱商事 ジャカルタ駐在員事務所", "所長"),
+    ("トヨタ自動車 ワシントン事務所", "所長"),
+]
+SELF_EMPLOYED_REVIEW = [
+    ("フリーランス（主要取引先：株式会社A）", "Webデザイナー"),
+    ("フリーランス（法人向けWeb制作）", "デザイナー"),
+    ("個人事業主（日本デザイン協会 会員）", "デザイナー"),
+    ("フリーランサー", "エンジニア"),
+    ("フリーライター", "ライター"),
+    ("株式会社X", "フリーライター"),
+    ("株式会社X（業務委託契約）", "ディレクター"),
+    ("株式会社X", "Webディレクター（業務委託契約にて）"),
+    ("株式会社X", "業務委託にてWebディレクション"),
+    ("株式会社X【業務委託】", "PM"),
+    ("株式会社X / 業務委託", "PM"),
+    ("たなか歯科", "院長"),
+    ("すずき内科", "院長"),
+    ("株式会社X", "フリーランスとして参画"),
+]
+NOT_CONTRACT_REVIEW = [
+    "株式会社X 期間従業員採用担当",
+    "株式会社X 契約社員採用担当",
+    "株式会社X 人事 契約社員・パートの労務管理",
+    "株式会社X 営業（契約社員から正社員登用）",
+    "株式会社X 契約社員→正社員",
+]
+CONTRACT_REVIEW = [
+    "株式会社X 事務（契約スタッフ）", "株式会社X 契約雇用", "株式会社X 有期社員",
+    "株式会社X 期間契約", "株式会社X 社内SE（契約・1年更新）", "株式会社X 営業【契約】",
+    "株式会社X 営業／契約", "Acme Inc. Analyst (Contract)", "Acme Inc. Contract Staff",
+    "Acme Inc. Contract Worker", "X市役所 会計年度任用職員", "X県庁 臨時職員",
+    "X大学 任期付き研究員",
+]
+NOT_FACTORY_REVIEW = [
+    ("株式会社X", "キャリアアドバイザー（製造領域担当）"),
+    ("株式会社X", "製造IT コンサルタント"),
+    ("株式会社X", "製造DX推進"),
+    ("株式会社X", "スマート工場推進リーダー"),
+    ("株式会社 ことば工場", "デザイナー"),
+    ("医療法人さくら会 さくら病院", "検査課"),       # 病院の臨床検査（自社が欲しい医療系人材）
+    ("株式会社クラウドX", "品質保証部"),              # SaaS の品質保証
+]
+FACTORY_REVIEW = [
+    ("株式会社X", "本社工場 製造課"), ("株式会社X", "工場長（本社工場）"),
+    ("株式会社X電機", "生産職"), ("株式会社X", "生産スタッフ"), ("株式会社X", "生産オペレーター"),
+    ("株式会社X", "生産G リーダー"), ("株式会社X", "生産グループ"), ("株式会社X", "生産チーム"),
+    ("株式会社X", "生産事業部"), ("株式会社X", "生管"), ("株式会社X", "生技"),
+    ("株式会社X工業", "品管"), ("株式会社X工業", "品証"),
+    ("株式会社X", "製造課 リーダー（顧客対応も担当）"),
+    ("株式会社X（豊橋工場）", "総務"), ("トヨタ自動車 (元町工場)", "総務"),
+    ("株式会社X", "工員"), ("株式会社X", "技能職"), ("株式会社X", "機械加工"),
+    ("株式会社X", "NC旋盤オペレーター"), ("株式会社X", "溶接工"), ("株式会社X", "塗装工"),
+    ("株式会社X", "プレス工"), ("株式会社X", "マシンオペレーター"),
+    ("Acme Inc.", "Manufacturing Engineer"), ("Acme Inc.", "Production Engineer"),
+    ("Acme Inc.", "Plant Manager"), ("Toyota Motor", "Quality Control"),
+]
+
+
+@pytest.mark.parametrize("company,title", NOT_SELF_EMPLOYED_REVIEW)
+def test_review_not_self_employed(company, title):
+    assert not is_self_employed(company, title)
+
+
+@pytest.mark.parametrize("company,title", SELF_EMPLOYED_REVIEW)
+def test_review_self_employed(company, title):
+    assert is_self_employed(company, title)
+
+
+@pytest.mark.parametrize("text", NOT_CONTRACT_REVIEW)
+def test_review_not_contract(text):
+    assert not is_contract(text)
+
+
+@pytest.mark.parametrize("text", CONTRACT_REVIEW)
+def test_review_contract(text):
+    assert is_contract(text)
+
+
+@pytest.mark.parametrize("company,title", NOT_FACTORY_REVIEW)
+def test_review_not_factory(company, title):
+    assert not is_factory_job(company, title)
+
+
+@pytest.mark.parametrize("company,title", FACTORY_REVIEW)
+def test_review_factory(company, title):
+    assert is_factory_job(company, title)
+
+
+def test_exact_half_is_excluded_without_rounding_drift():
+    """月数で割合を出すので、0.1年に丸めた年数の足し算で半分を割り込まない。"""
+    c = make_candidate(employments=[
+        Employment(company="株式会社A", title="営業", years=1.4, months=17, is_current=True),
+        Employment(company="株式会社B", title="事務（契約社員）", years=0.6, months=7),
+        Employment(company="株式会社C", title="事務（契約社員）", years=0.8, months=10),
+    ])
+    assert contract_ratio(c) == pytest.approx(17 / 34)
+    assert any("契約社員" in r for r in check_eligibility(c).failed)
+
+
+def test_boolean_ratio_setting_is_rejected():
+    from pydantic import ValidationError
+
+    from bizreach_scout.rules import validate_rules
+
+    with pytest.raises(ValidationError, match="contract_career_ratio_exclude"):
+        validate_rules({"eligibility": {"contract_career_ratio_exclude": True}})
