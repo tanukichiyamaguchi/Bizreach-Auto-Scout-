@@ -178,6 +178,11 @@ class Candidate(BaseModel):
         return [n for n in names if n]
 
     def max_single_tenure_years(self) -> float | None:
+        """同一企業での最長の在籍年数。
+
+        同じ会社を異動・雇用形態の変更ごとに複数行で書く人がいるため、続けて並んだ同じ社名の
+        職歴は合算する（並びは入社が新しい順。間に別の会社があれば出戻りなので別々に数える）。
+        """
         values = [
             v
             for v in (
@@ -186,6 +191,18 @@ class Candidate(BaseModel):
             )
             if v is not None
         ]
+        run_name: str | None = None
+        run_months: int | None = None
+        for e in self.employments:
+            m = e.months if e.months is not None else (
+                None if e.years is None else round(e.years * 12))
+            key = "".join(e.company.split())
+            if key and key == run_name and m is not None and run_months is not None:
+                run_months += m
+            else:
+                run_name, run_months = key, m
+            if run_months is not None:
+                values.append(round(run_months / 12.0, 1))
         return max(values) if values else None
 
     def job_change_count(self) -> int:

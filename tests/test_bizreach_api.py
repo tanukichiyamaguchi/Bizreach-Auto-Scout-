@@ -765,3 +765,88 @@ def test_resigned_job_without_end_date_has_unknown_length():
     c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
     abc = next(e for e in c.employments if e.company == "株式会社ABC商事")
     assert abc.years is None and abc.months is None
+
+
+# --- 現職の取り方（並び順・同時在籍・同じ会社の複数行・退職予定日）2026-10 ----------
+
+def _ce(name, title, start, end=None, status=None):
+    return {"companyName": {"ja": name}, "positionName": {"ja": title},
+            "period": {"from": {"year": start[0], "month": start[1]},
+                       "to": None if end is None else {"year": end[0], "month": end[1]}},
+            "employmentStatus": status or ("Employed" if end is None else "Resigned")}
+
+
+def _tenure_failures(c):
+    return [r for r in check_eligibility(c).failed if "勤続" in r or "直近" in r or "在籍" in r]
+
+
+def _with_jobs(*jobs):
+    resume = _resume()
+    resume["companyExperiences"] = list(jobs)
+    return resume_to_candidate(resume, now=datetime(2026, 10, 27))
+
+
+def test_same_company_split_into_rows_counts_as_one_tenure():
+    """同じ会社を異動ごとに複数行で書いた人（2024/7〜 と 2022/4〜2024/6）は計4.5年在籍。"""
+    c = _with_jobs(_ce("株式会社A", "マーケティング", (2024, 7)),
+                   _ce("株式会社A", "法人営業", (2022, 4), (2024, 6)))
+    assert c.current_tenure_years == 4.5
+    assert c.years_since_last_job_change == 4.5
+    assert c.max_single_tenure_years() == 4.5
+    assert _tenure_failures(c) == []
+
+
+def test_same_company_three_rows():
+    c = _with_jobs(_ce("株式会社A", "マネージャー", (2025, 4)),
+                   _ce("株式会社A", "法人営業", (2023, 4), (2025, 3)),
+                   _ce("株式会社A", "新卒営業", (2021, 4), (2023, 3)))
+    assert c.current_tenure_years == 5.5
+    assert _tenure_failures(c) == []
+
+
+def test_returning_to_a_former_employer_is_not_merged():
+    """間に別の会社があれば出戻りなので、在籍は合算しない。"""
+    c = _with_jobs(_ce("株式会社A", "営業", (2025, 4)),
+                   _ce("株式会社B", "営業", (2023, 4), (2025, 3)),
+                   _ce("株式会社A", "営業", (2021, 4), (2023, 3)))
+    assert c.current_tenure_years == 1.5
+    assert any("同一企業での勤続" in r for r in _tenure_failures(c))
+
+
+def test_side_freelance_listed_first_does_not_replace_main_job():
+    """本業（正社員10.5年）と並行する副業のフリーランスが先頭に来ても、現職は本業。"""
+    c = _with_jobs(_ce("フリーランス", "Webデザイナー（副業）", (2025, 4)),
+                   _ce("株式会社B", "法人営業", (2016, 4)))
+    assert c.current_company == "株式会社B"
+    assert c.years_since_last_job_change == 10.5
+    assert check_eligibility(c).eligible
+
+
+def test_oldest_first_order_still_finds_current_job():
+    """職歴が古い順で返っても、在籍中の新しい会社を現職とする（入社7か月 → 直近の転職）。"""
+    c = _with_jobs(_ce("株式会社旧", "営業", (2014, 4), (2026, 2)),
+                   _ce("株式会社新", "営業", (2026, 3)))
+    assert c.current_company == "株式会社新"
+    assert any("直近" in r for r in _tenure_failures(c))
+
+
+def test_short_finished_side_job_listed_first_is_not_current():
+    c = _with_jobs(_ce("株式会社H", "Webディレクター（副業）", (2026, 1), (2026, 6)),
+                   _ce("株式会社I", "法人営業", (2016, 4)))
+    assert c.current_company == "株式会社I"
+    assert _tenure_failures(c) == []
+
+
+def test_future_end_date_is_counted_until_today():
+    """退職予定の未来の年月（2027/3）は今日までの在籍として数える（27か月 = 2.2年）。"""
+    c = _with_jobs(_ce("株式会社D", "営業", (2024, 7), (2027, 3), status="Employed"),
+                   _ce("株式会社E", "営業", (2022, 4), (2024, 6)))
+    assert c.employments[0].is_current
+    assert c.employments[0].months == 27
+    assert any("同一企業での勤続が2.5年未満" in r for r in _tenure_failures(c))
+
+
+def test_freelance_with_future_end_date_is_current_self_employed():
+    c = _with_jobs(_ce("フリーランス", "エンジニア", (2025, 1), (2027, 3), status="Employed"),
+                   _ce("株式会社C", "エンジニア", (2016, 4), (2024, 12)))
+    assert any("現職が個人事業主" in r for r in check_eligibility(c).failed)
