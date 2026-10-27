@@ -46,6 +46,20 @@ class EligibilityRules(BaseModel):
     exclude_residency_status_mention: bool = True
     exclude_overseas_residence: bool = True
     exclude_unwanted_work_conditions: bool = True
+    # 職歴の種類による除外（career_types.py）。割合は在籍期間の合計に占める割合で、
+    # この値「以上」なら対象外。None で無効。
+    exclude_current_self_employed: bool = True
+    contract_career_ratio_exclude: float | None = Field(default=0.5, gt=0, le=1)
+    factory_career_ratio_exclude: float | None = Field(default=0.5, gt=0, le=1)
+
+    @field_validator("contract_career_ratio_exclude", "factory_career_ratio_exclude",
+                     mode="before")
+    @classmethod
+    def _ratio_is_not_bool(cls, v: object) -> object:
+        """true は 1.0 と読まれて実質無効になるため、割合に真偽値を書いたら落とす。"""
+        if isinstance(v, bool):
+            raise ValueError("割合は 0〜1 の数値で書いてください（無効にするなら null）。")
+        return v
     # 有効にする勤務条件の判定（work_conditions.SIGNAL_KEYS のいずれか）。
     unwanted_work_conditions: list[str] = Field(
         default_factory=lambda: list(DEFAULT_WORK_CONDITION_SIGNALS))

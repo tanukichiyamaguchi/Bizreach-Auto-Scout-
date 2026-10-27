@@ -61,13 +61,30 @@ class Education(str, Enum):
         return self.rank >= minimum.rank
 
 
+class EmploymentSegment(BaseModel):
+    """社内での役職・部署・プロジェクトごとの期間（レジュメの companyCareers 1件分）。"""
+
+    name: str = ""                 # 役職・部署・プロジェクト名
+    years: float | None = None     # その期間の長さ（年・表示用に0.1年で丸め）。期間不明は None
+    months: int | None = None      # 同じ長さを月数で（割合の計算用。丸め誤差を出さない）
+
+
 class Employment(BaseModel):
     """1社分の在籍履歴。"""
 
     company: str = ""
     title: str = ""
-    years: float | None = None  # 在籍年数
+    # 在籍年数 = 入社〜退職（在籍中は〜現在）。退職済みの会社も「入社〜今日」で数えていた
+    # 不具合（2014/4〜2018/3 の前職が12年扱い）を 2026-10 に修正した。
+    years: float | None = None
+    months: int | None = None      # 同じ長さを月数で（割合の計算用）
     industry: str = ""
+    is_current: bool = False       # 在籍中（退職年月が無い）か
+    # 雇用形態を表すフィールドがレジュメにあればその値（ビズリーチの入力欄に雇用形態は
+    # 無いとみられ、本番では未確認。あれば契約社員・個人事業主の判定に使う）。
+    employment_type: str = ""
+    # 社内の役職・部署ごとの期間。「キャリアの半分以上が◯◯」を役職単位で数えるのに使う。
+    segments: list[EmploymentSegment] = Field(default_factory=list)
 
 
 class Candidate(BaseModel):
@@ -100,6 +117,10 @@ class Candidate(BaseModel):
     current_company: str = ""
     current_title: str = ""
     current_tenure_years: float | None = None  # 現職の在籍年数
+    # 直近の勤務先に入社してから今日までの年数（「直近1年以内の転職」の判定用）。
+    # 在籍中なら current_tenure_years と同じ。離職中の人は、最後の勤務先の在籍期間ではなく
+    # 入社からの経過で見る（以前からの判定の意味を保つ。None なら current_tenure_years を使う）。
+    years_since_last_job_change: float | None = None
     total_experience_years: float | None = None
 
     industry: str = ""
@@ -157,6 +178,11 @@ class Candidate(BaseModel):
         return [n for n in names if n]
 
     def max_single_tenure_years(self) -> float | None:
+        """同一企業での最長の在籍年数。
+
+        同じ会社を異動・雇用形態の変更ごとに複数行で書く人がいるため、続けて並んだ同じ社名の
+        職歴は合算する（並びは入社が新しい順。間に別の会社があれば出戻りなので別々に数える）。
+        """
         values = [
             v
             for v in (
@@ -165,6 +191,18 @@ class Candidate(BaseModel):
             )
             if v is not None
         ]
+        run_name: str | None = None
+        run_months: int | None = None
+        for e in self.employments:
+            m = e.months if e.months is not None else (
+                None if e.years is None else round(e.years * 12))
+            key = "".join(e.company.split())
+            if key and key == run_name and m is not None and run_months is not None:
+                run_months += m
+            else:
+                run_name, run_months = key, m
+            if run_months is not None:
+                values.append(round(run_months / 12.0, 1))
         return max(values) if values else None
 
     def job_change_count(self) -> int:

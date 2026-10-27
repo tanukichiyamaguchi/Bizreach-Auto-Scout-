@@ -5,6 +5,9 @@
 いずれかを満たさない（または判定不能）の場合は eligible=False とし、
 完全自動送信からは除外して「要確認」リストへ回す。
 
+職歴の種類（詳細は career_types.py。通常スカウト・ピックアップの両方）:
+- 現職が個人事業主 / キャリアの半分以上が契約社員 / 半分以上が工場・生産部門
+
 勤務条件の判定（詳細は work_conditions.py）:
 - 既定で 出張不可 / 残業なし希望 / 在宅勤務希望（転勤NGは自社求人が「転勤なし」のため既定で無効）
   （本人が希望として書いた欄のみを走査。「リモート可」等の“許容”は除外しない）
@@ -21,6 +24,7 @@
 
 from __future__ import annotations
 
+from .career_types import contract_ratio, factory_ratio, is_current_self_employed
 from .config import scout_rules
 from .foreign import (
     has_foreign_native_language,
@@ -153,6 +157,22 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
         failed.extend(unwanted_work_conditions(
             wish, cfg.get("unwanted_work_conditions", DEFAULT_WORK_CONDITION_SIGNALS)))
 
+    # --- 職歴の種類（現職が個人事業主／契約社員中心／工場・生産部門中心）-----------
+    # 通常スカウトとピックアップの両方に効かせるため apply_status_filter に依存させない。
+    # 割合は在籍期間の合計に占める割合（社数ではない）。期間が分からなければ判定しない。
+    if cfg.get("exclude_current_self_employed", True) and is_current_self_employed(candidate):
+        failed.append("現職が個人事業主（フリーランス・自営・業務委託）のため対象外")
+    for key, ratio_fn, label in (
+        ("contract_career_ratio_exclude", contract_ratio, "契約社員"),
+        ("factory_career_ratio_exclude", factory_ratio, "工場・生産部門"),
+    ):
+        limit = cfg.get(key)
+        if limit is None:
+            continue
+        ratio = ratio_fn(candidate)
+        if ratio is not None and ratio >= limit - 1e-9:
+            failed.append(f"キャリアの{ratio:.0%}が{label}のため対象外（{limit:.0%}以上）")
+
     # --- 同一企業での勤続年数 -------------------------------------------------
     min_years = cfg.get("min_same_company_years", 2.5)
     tenure = candidate.max_single_tenure_years()
@@ -165,7 +185,9 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
     # 現職在籍が min_current_tenure_years 未満 = 直近に転職した人として除外。
     min_cur = cfg.get("min_current_tenure_years")
     if min_cur:
-        cur = candidate.current_tenure_years
+        cur = (candidate.years_since_last_job_change
+               if candidate.years_since_last_job_change is not None
+               else candidate.current_tenure_years)
         if cur is None:
             # 現職在籍が不明 = 直近に転職したか判定不能。過去在籍から max_single_tenure が
             # 取れて「勤続年数が不明」で拾えない場合のみ、判定不能→要確認として回す

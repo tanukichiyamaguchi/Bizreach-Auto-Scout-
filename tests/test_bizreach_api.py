@@ -631,3 +631,222 @@ def test_remote_ok_work_style_does_not_exclude():
     resume["desiredConditions"] = {"workStyles": [{"ja": "リモートワーク可"}]}
     c = resume_to_candidate(resume, now=datetime(2026, 7, 1))
     assert check_eligibility(c).eligible
+
+
+# --- 在籍年数: 退職済みの会社は「入社〜退職」で数える（2026-10 修正）----------------
+
+def test_past_employer_tenure_uses_end_date():
+    """以前は退職年月を無視し「入社〜今日」で数えていた（ABC商事 2014/4〜2018/3 が12年扱い）。"""
+    c = resume_to_candidate(_resume(), now=datetime(2026, 10, 27))
+    years = {e.company: e.years for e in c.employments}
+    assert years["株式会社ABC商事"] == 4.0          # 2014/4〜2018/3 = 48か月
+    assert years["株式会社リクルート"] == 8.5       # 在籍中は〜現在
+    assert c.max_single_tenure_years() == 8.5      # 以前は過去の会社の誤った12.5年が最大になっていた
+
+
+def test_short_stints_now_fail_same_company_tenure_rule():
+    """どの会社も2.5年未満なのに、入社が古い会社があるだけで勤続条件を満たしていた不具合。"""
+    resume = _resume()
+    resume["companyExperiences"] = [
+        {"companyName": {"ja": "現職株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2025, "month": 1}, "to": None}, "employmentStatus": "Employed"},
+        {"companyName": {"ja": "前職1株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2023, "month": 4}, "to": {"year": 2024, "month": 12}},
+         "employmentStatus": "Resigned"},
+        {"companyName": {"ja": "前職2株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2021, "month": 4}, "to": {"year": 2023, "month": 3}},
+         "employmentStatus": "Resigned"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 27))
+    assert [e.years for e in c.employments] == [1.8, 1.8, 2.0]
+    assert any("同一企業での勤続が2.5年未満" in r for r in check_eligibility(c).failed)
+
+
+def test_period_years_edge_cases():
+    from bizreach_scout.bizreach.api import _period_years
+
+    now = datetime(2026, 10, 1)
+    assert _period_years({"from": {"year": 2021, "month": 4}, "to": {"year": 2023, "month": 9}}, now) == 2.5
+    assert _period_years({"from": {"year": "2020", "month": "4"}, "to": None}, now) == 6.5  # 文字列でも落ちない
+    assert _period_years({"from": {"year": 2020}, "to": {"year": 2021}}, now) == 2.0       # 月欠損は1月〜12月
+    assert _period_years({"from": {"year": 2027, "month": 1}, "to": None}, now) == 0.0     # 未来日は0
+    assert _period_years({"from": {}, "to": None}, now) is None
+    assert _period_years(None, now) is None
+
+
+def test_employment_captures_current_flag_and_segments():
+    """「現職」と社内の役職・部署ごとの期間を保持する（職歴の種類による除外で使う）。"""
+    resume = _resume()
+    resume["companyExperiences"] = [
+        {"companyName": {"ja": "トヨタ自動車株式会社"}, "positionName": {"ja": "経営企画部 課長"},
+         "period": {"from": {"year": 2016, "month": 4}, "to": None}, "employmentStatus": "Employed",
+         "companyCareers": [
+             {"name": {"ja": "生産技術部"},
+              "period": {"from": {"year": 2016, "month": 4}, "to": {"year": 2019, "month": 3}}},
+             {"name": {"ja": "経営企画部"}, "period": {"from": {"year": 2019, "month": 4}, "to": None}},
+         ]},
+        {"companyName": {"ja": "旧職株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2012, "month": 4}, "to": {"year": 2016, "month": 3}},
+         "employmentStatus": "Resigned"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 4, 1))
+    cur, old = c.employments
+    assert cur.is_current and not old.is_current
+    assert [(s.name, s.years) for s in cur.segments] == [("生産技術部", 3.0), ("経営企画部", 7.0)]
+
+
+def test_resigned_status_is_not_current_even_without_end_date():
+    resume = _resume()
+    resume["companyExperiences"][0]["employmentStatus"] = "Resigned"
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
+    assert not c.employments[0].is_current
+
+
+def test_employment_type_field_is_read_if_present():
+    """雇用形態の欄は本番で未確認。候補キーに値があれば拾う（無ければ空）。"""
+    resume = _resume()
+    resume["companyExperiences"][0]["employmentType"] = {"ja": "契約社員"}
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
+    assert c.employments[0].employment_type == "契約社員"
+    assert c.employments[1].employment_type == ""
+
+
+def test_career_structure_is_logged_once(caplog):
+    """職歴のキー構造と employmentStatus の値を、新しく現れたときだけログに出す（値は出さない）。"""
+    import logging
+
+    from bizreach_scout.bizreach import api
+
+    for s in (api._logged_career_keys, api._logged_segment_keys,
+              api._logged_employment_status, api._logged_job_category_keys):
+        s.clear()
+    with caplog.at_level(logging.INFO, logger="bizscout"):
+        resume_to_candidate(_resume(), now=datetime(2026, 10, 1))
+        resume_to_candidate(_resume(), now=datetime(2026, 10, 1))
+    msgs = [r.getMessage() for r in caplog.records]
+    keys = [m for m in msgs if m.startswith("職歴(companyExperiences)のキー")]
+    assert keys == ["職歴(companyExperiences)のキー: "
+                    "['companyCareers', 'companyName', 'employmentStatus', 'period', 'positionName']"]
+    assert sum(m.startswith("職歴の employmentStatus 値を検出") for m in msgs) == 2  # Employed/Resigned
+    assert not any("リクルート" in m for m in msgs if "キー" in m)  # 会社名などの値は出さない
+
+
+def test_self_employed_current_job_excluded_via_api():
+    resume = _resume()
+    resume["companyExperiences"][0]["companyName"] = {"ja": "フリーランス"}
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
+    assert any("現職が個人事業主" in r for r in check_eligibility(c).failed)
+
+
+def test_unemployed_candidate_is_not_flagged_as_recent_job_change():
+    """離職中の人は「直近1年以内の転職」を最後の入社からの経過で見る（以前の判定の意味を保つ）。
+
+    最後の勤務先の在籍が半年でも、入社が何年も前なら直近の転職ではない。
+    """
+    resume = _resume()
+    resume["companyExperiences"] = [
+        {"companyName": {"ja": "最終職株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2019, "month": 1}, "to": {"year": 2019, "month": 6}},
+         "employmentStatus": "Resigned"},
+        {"companyName": {"ja": "前職株式会社"}, "positionName": {"ja": "営業"},
+         "period": {"from": {"year": 2012, "month": 4}, "to": {"year": 2018, "month": 12}},
+         "employmentStatus": "Resigned"},
+    ]
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
+    assert c.current_tenure_years == 0.5            # 最後の勤務先の在籍期間（文面生成用）
+    assert c.years_since_last_job_change == 7.8     # 直近の転職からの経過（判定用）
+    assert not any("直近" in r for r in check_eligibility(c).failed)
+
+
+def test_resigned_job_without_end_date_has_unknown_length():
+    """退職済みなのに退職年月が無い職歴は、今日まで数えると同じ不具合になるので不明にする。"""
+    resume = _resume()
+    resume["companyExperiences"][1]["period"]["to"] = None   # ABC商事（Resigned）
+    c = resume_to_candidate(resume, now=datetime(2026, 10, 1))
+    abc = next(e for e in c.employments if e.company == "株式会社ABC商事")
+    assert abc.years is None and abc.months is None
+
+
+# --- 現職の取り方（並び順・同時在籍・同じ会社の複数行・退職予定日）2026-10 ----------
+
+def _ce(name, title, start, end=None, status=None):
+    return {"companyName": {"ja": name}, "positionName": {"ja": title},
+            "period": {"from": {"year": start[0], "month": start[1]},
+                       "to": None if end is None else {"year": end[0], "month": end[1]}},
+            "employmentStatus": status or ("Employed" if end is None else "Resigned")}
+
+
+def _tenure_failures(c):
+    return [r for r in check_eligibility(c).failed if "勤続" in r or "直近" in r or "在籍" in r]
+
+
+def _with_jobs(*jobs):
+    resume = _resume()
+    resume["companyExperiences"] = list(jobs)
+    return resume_to_candidate(resume, now=datetime(2026, 10, 27))
+
+
+def test_same_company_split_into_rows_counts_as_one_tenure():
+    """同じ会社を異動ごとに複数行で書いた人（2024/7〜 と 2022/4〜2024/6）は計4.5年在籍。"""
+    c = _with_jobs(_ce("株式会社A", "マーケティング", (2024, 7)),
+                   _ce("株式会社A", "法人営業", (2022, 4), (2024, 6)))
+    assert c.current_tenure_years == 4.5
+    assert c.years_since_last_job_change == 4.5
+    assert c.max_single_tenure_years() == 4.5
+    assert _tenure_failures(c) == []
+
+
+def test_same_company_three_rows():
+    c = _with_jobs(_ce("株式会社A", "マネージャー", (2025, 4)),
+                   _ce("株式会社A", "法人営業", (2023, 4), (2025, 3)),
+                   _ce("株式会社A", "新卒営業", (2021, 4), (2023, 3)))
+    assert c.current_tenure_years == 5.5
+    assert _tenure_failures(c) == []
+
+
+def test_returning_to_a_former_employer_is_not_merged():
+    """間に別の会社があれば出戻りなので、在籍は合算しない。"""
+    c = _with_jobs(_ce("株式会社A", "営業", (2025, 4)),
+                   _ce("株式会社B", "営業", (2023, 4), (2025, 3)),
+                   _ce("株式会社A", "営業", (2021, 4), (2023, 3)))
+    assert c.current_tenure_years == 1.5
+    assert any("同一企業での勤続" in r for r in _tenure_failures(c))
+
+
+def test_side_freelance_listed_first_does_not_replace_main_job():
+    """本業（正社員10.5年）と並行する副業のフリーランスが先頭に来ても、現職は本業。"""
+    c = _with_jobs(_ce("フリーランス", "Webデザイナー（副業）", (2025, 4)),
+                   _ce("株式会社B", "法人営業", (2016, 4)))
+    assert c.current_company == "株式会社B"
+    assert c.years_since_last_job_change == 10.5
+    assert check_eligibility(c).eligible
+
+
+def test_oldest_first_order_still_finds_current_job():
+    """職歴が古い順で返っても、在籍中の新しい会社を現職とする（入社7か月 → 直近の転職）。"""
+    c = _with_jobs(_ce("株式会社旧", "営業", (2014, 4), (2026, 2)),
+                   _ce("株式会社新", "営業", (2026, 3)))
+    assert c.current_company == "株式会社新"
+    assert any("直近" in r for r in _tenure_failures(c))
+
+
+def test_short_finished_side_job_listed_first_is_not_current():
+    c = _with_jobs(_ce("株式会社H", "Webディレクター（副業）", (2026, 1), (2026, 6)),
+                   _ce("株式会社I", "法人営業", (2016, 4)))
+    assert c.current_company == "株式会社I"
+    assert _tenure_failures(c) == []
+
+
+def test_future_end_date_is_counted_until_today():
+    """退職予定の未来の年月（2027/3）は今日までの在籍として数える（27か月 = 2.2年）。"""
+    c = _with_jobs(_ce("株式会社D", "営業", (2024, 7), (2027, 3), status="Employed"),
+                   _ce("株式会社E", "営業", (2022, 4), (2024, 6)))
+    assert c.employments[0].is_current
+    assert c.employments[0].months == 27
+    assert any("同一企業での勤続が2.5年未満" in r for r in _tenure_failures(c))
+
+
+def test_freelance_with_future_end_date_is_current_self_employed():
+    c = _with_jobs(_ce("フリーランス", "エンジニア", (2025, 1), (2027, 3), status="Employed"),
+                   _ce("株式会社C", "エンジニア", (2016, 4), (2024, 12)))
+    assert any("現職が個人事業主" in r for r in check_eligibility(c).failed)

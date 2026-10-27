@@ -16,11 +16,13 @@ import re
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
+from typing import NamedTuple
 from urllib.parse import parse_qs, urlparse
 
+from ..career_types import is_self_employed, is_side_job
 from ..foreign import has_country_tag, is_japanese_language_school, is_overseas_school_name
 from ..logging_config import logger
-from ..models import Candidate, Education, Employment, Gender
+from ..models import Candidate, Education, Employment, EmploymentSegment, Gender
 from .errors import BizreachAuthError
 
 _GRADE_MAP = {
@@ -356,15 +358,186 @@ def _extract_languages(resume: dict) -> str:
     return ""
 
 
+def _year_month(node: object, default_month: int) -> tuple[int, int] | None:
+    """{"year": 2018, "month": 4} を (2018, 4) にする。年が無ければ None。
+
+    year/month が文字列で返っても落ちないよう数値に直す。月が無いときは default_month。
+    """
+    if not isinstance(node, dict):
+        return None
+    try:
+        y = int(node.get("year") or 0)
+        m = int(node.get("month") or 0)
+    except (TypeError, ValueError):
+        return None
+    if y <= 0:
+        return None
+    return y, (m if 1 <= m <= 12 else default_month)
+
+
 def _years_since(period_from: dict | None, now: datetime | None = None) -> float | None:
-    if not period_from or "year" not in period_from:
+    """入社年月から現在までの年数（在籍中の会社用）。"""
+    start = _year_month(period_from, 1)
+    if start is None:
         return None
     now = now or datetime.now()
-    y = period_from.get("year")
-    mth = period_from.get("month") or 1
-    if not y:
+    return max(0.0, round((now.year - start[0]) + (now.month - start[1]) / 12.0, 1))
+
+
+def _period_months(period: dict | None, current: bool,
+                   now: datetime | None = None) -> int | None:
+    """在籍期間の長さ（月数）。退職年月があれば入社〜退職、在籍中なら入社〜現在。
+
+    以前は退職年月を無視して全社を「入社〜今日」で数えており、2014/4〜2018/3 の前職が
+    12年扱いになっていた（同一企業での勤続判定が甘くなり、文面生成にも誤った年数が
+    渡っていた）。退職済みは開始月・終了月を含めて数える（2021/4〜2023/9 = 30か月）。
+    退職済みなのに退職年月が無いものは、今日まで数えると同じ誤りになるので不明（None）にする。
+    """
+    if not isinstance(period, dict):
         return None
-    return round((now.year - y) + (now.month - mth) / 12.0, 1)
+    start = _year_month(period.get("from"), 1)
+    if start is None:
+        return None
+    now = now or datetime.now()
+    end = _year_month(period.get("to"), 12)
+    if end is not None and end > (now.year, now.month):
+        end, current = None, True   # 退職予定の未来の年月は、今日までの在籍として数える
+    if end is None:
+        if not current:
+            return None
+        return max(0, (now.year - start[0]) * 12 + (now.month - start[1]))
+    return max(0, (end[0] - start[0]) * 12 + (end[1] - start[1]) + 1)
+
+
+def _years(months: int | None) -> float | None:
+    return None if months is None else round(months / 12.0, 1)
+
+
+def _period_years(period: dict | None, now: datetime | None = None,
+                  current: bool = True) -> float | None:
+    """在籍期間の長さ（年・0.1年で丸め）。期間の数え方は _period_months を参照。"""
+    return _years(_period_months(period, current, now))
+
+
+def _is_current(ce: dict, now: datetime | None = None) -> bool:
+    """在籍中の会社か。
+
+    退職年月が無いか、退職予定の未来の年月が書かれていれば在籍中。
+    employmentStatus が Resigned なら在籍中ではない。
+    """
+    if str(ce.get("employmentStatus") or "").lower() == "resigned":
+        return False
+    end = _year_month((ce.get("period") or {}).get("to"), 1)
+    if end is None:
+        return True
+    now = now or datetime.now()
+    return end > (now.year, now.month)
+
+
+def _start(ce: dict) -> tuple[int, int]:
+    """入社年月（並べ替え用。不明なら最も古い扱い）。"""
+    return _year_month((ce.get("period") or {}).get("from"), 1) or (0, 0)
+
+
+class _Job(NamedTuple):
+    ce: dict
+    name: str
+    title: str
+    current: bool
+    months: int | None
+
+
+def _main_job(jobs: list[_Job]) -> int | None:
+    """現職（本業）の位置。jobs は入社が新しい順。
+
+    在籍中が複数あれば（本業と副業）、副業・個人事業と書かれていないもののうち最も新しいもの。
+    在籍中が無ければ（離職中）最後の勤務先。
+    """
+    if not jobs:
+        return None
+    current = [i for i, j in enumerate(jobs) if j.current]
+    main = [i for i in current
+            if not is_side_job(jobs[i].name, jobs[i].title)
+            and not is_self_employed(jobs[i].name, jobs[i].title, _employment_type(jobs[i].ce))]
+    pick = main or current
+    return pick[0] if pick else 0
+
+
+def _same_company_run(jobs: list[_Job], i: int) -> list[_Job]:
+    """i 番目から古い方へ、同じ社名で続けて書かれた職歴（異動・雇用形態の変更で行を分けた人）。"""
+    key = "".join(jobs[i].name.split())
+    run = [jobs[i]]
+    for j in jobs[i + 1:]:
+        if not key or "".join(j.name.split()) != key:
+            break
+        run.append(j)
+    return run
+
+
+# 職歴要素で「雇用形態」を表しうるキー（ビズリーチの入力欄に雇用形態は無いとみられ、
+# 本番では未確認）。employmentStatus は在籍中/退職済み（Employed/Resigned）で雇用形態ではない。
+_EMPLOYMENT_TYPE_KEYS = (
+    "employmentType", "employmentForm", "employmentPattern", "employmentCategory",
+    "contractType", "employeeType", "hiringType",
+)
+
+# 職歴の実構造を本番ログで確認するための記録（キー名と enum 値だけ。会社名等の値は出さない）。
+_logged_career_keys: set[str] = set()
+_logged_segment_keys: set[str] = set()
+_logged_employment_status: set[str] = set()
+_logged_job_category_keys: set[str] = set()
+
+
+def _log_career_structure(resume: dict) -> None:
+    """職歴（companyExperiences / companyCareers）と経験職種(jobCategories)の構造をログに出す。
+
+    雇用形態・部署を表すフィールドの有無を推測で埋めず、実データで確定するため
+    （要件定義書 5.4 の手順）。新しいキーが現れたときだけ出すので毎回は出ない。
+    """
+    for ce in resume.get("companyExperiences") or []:
+        if not isinstance(ce, dict):
+            continue
+        new = set(ce) - _logged_career_keys
+        if new:
+            _logged_career_keys.update(new)
+            logger.info("職歴(companyExperiences)のキー: %s", sorted(_logged_career_keys))
+        status = str(ce.get("employmentStatus") or "")
+        if status and status not in _logged_employment_status:
+            _logged_employment_status.add(status)
+            logger.info("職歴の employmentStatus 値を検出: %s", status)
+        for cc in ce.get("companyCareers") or []:
+            if isinstance(cc, dict) and (new := set(cc) - _logged_segment_keys):
+                _logged_segment_keys.update(new)
+                logger.info("社内経歴(companyCareers)のキー: %s", sorted(_logged_segment_keys))
+    for jc in resume.get("jobCategories") or []:
+        if isinstance(jc, dict) and (new := set(jc) - _logged_job_category_keys):
+            _logged_job_category_keys.update(new)
+            logger.info("経験職種(jobCategories)のキー: %s", sorted(_logged_job_category_keys))
+
+
+def _employment_type(ce: dict) -> str:
+    for k in _EMPLOYMENT_TYPE_KEYS:
+        v = ce.get(k)
+        text = (_ja(v) or _en(v)) if isinstance(v, dict) else (str(v).strip() if v else "")
+        if text:
+            return text
+    return ""
+
+
+def _segments(ce: dict, now: datetime | None, company_current: bool) -> list[EmploymentSegment]:
+    """社内の役職・部署ごとの期間（companyCareers）。名前は ja→en の順で取る。"""
+    out: list[EmploymentSegment] = []
+    for cc in ce.get("companyCareers") or []:
+        if not isinstance(cc, dict):
+            continue
+        name = _ja(cc.get("name")) or _en(cc.get("name"))
+        if not name:
+            continue
+        # 終了年月の無い社内経歴は、会社に在籍中なら現在まで、退職済みなら不明。
+        current = company_current and (cc.get("isPresent") is not False)
+        months = _period_months(cc.get("period"), current, now)
+        out.append(EmploymentSegment(name=name, years=_years(months), months=months))
+    return out
 
 
 def _career_text(ce: dict) -> str:
@@ -432,26 +605,44 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         )
 
     # --- 職歴 ---
-    companies = resume.get("companyExperiences") or []
+    # 入社が新しい順に並べ直す（API の並び順に依存しない。古い順で返っても現職を取り違えない）。
+    companies = sorted(resume.get("companyExperiences") or [], key=_start, reverse=True)
     current_company = current_title = ""
     current_tenure = None
     employments: list[Employment] = []
     prior: list[str] = []
     career_blocks: list[str] = []
-    for i, ce in enumerate(companies):
+    _log_career_structure(resume)
+    since_last_change = None
+    jobs: list[_Job] = []
+    for ce in companies:
         name = _ja(ce.get("companyName"))
         title = _ja(ce.get("positionName"))
-        yrs = _years_since((ce.get("period") or {}).get("from"), now)
-        if i == 0:
-            current_company, current_title, current_tenure = name, title, yrs
-        else:
-            if name:
-                prior.append(name)
+        current = _is_current(ce, now)
+        months = _period_months(ce.get("period"), current, now)
+        jobs.append(_Job(ce, name, title, current, months))
         if name:
-            employments.append(Employment(company=name, title=title, years=yrs, industry=""))
+            employments.append(Employment(
+                company=name, title=title, years=_years(months), months=months, industry="",
+                is_current=current,
+                employment_type=_employment_type(ce),
+                segments=_segments(ce, now, current),
+            ))
         block = _career_text(ce)
         if name or block:
             career_blocks.append(f"■{name}（{title}）\n{block}".strip())
+    main = _main_job(jobs)
+    if main is not None:
+        cur = jobs[main]
+        current_company, current_title = cur.name, cur.title
+        # 同じ会社を複数行に分けて書いた人は、続けて在籍した期間を合わせて現職の在籍とする。
+        run = _same_company_run(jobs, main)
+        run_months = [j.months for j in run]
+        current_tenure = _years(
+            sum(m for m in run_months if m is not None) if None not in run_months else cur.months)
+        # 「直近1年以内の転職」は、離職中でも直近の入社からの経過で見る（以前の判定の意味を保つ）。
+        since_last_change = _years_since((run[-1].ce.get("period") or {}).get("from"), now)
+        prior = [j.name for i, j in enumerate(jobs) if i != main and j.name]
 
     # --- 要約・自己PR・実績（文面生成の材料）---
     summary_parts = [_ja(resume.get("jobSummary"))]
@@ -518,6 +709,7 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
         current_company=current_company,
         current_title=current_title,
         current_tenure_years=current_tenure,
+        years_since_last_job_change=since_last_change,
         prior_companies=prior,
         employments=employments,
         job_function=current_title,

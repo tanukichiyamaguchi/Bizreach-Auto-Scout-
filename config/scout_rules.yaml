@@ -41,6 +41,17 @@ eligibility:
   #   business_trip … 出張不可      overtime    … 残業なし希望
   #   remote_work   … 在宅勤務希望  relocation  … 転勤NG（既定で無効）
   unwanted_work_conditions: [business_trip, overtime, remote_work]
+  # 職歴の種類による除外（2026-10 運用者指示。通常スカウト・ピックアップの両方に効く）。
+  # 判定は会社名・役職・社内の役職/部署名から行う（職務内容の自由記述は見ない。
+  # 「工場向けSaaSの営業」「契約社員の労務管理」のような仕事の対象を誤って拾うため）。
+  # 詳細は src/bizreach_scout/career_types.py。
+  # 現職が個人事業主（フリーランス・自営・業務委託・屋号での開業）なら対象外。
+  exclude_current_self_employed: true
+  # キャリア（在籍期間の合計）のうち、この割合「以上」が契約社員なら対象外。null で無効。
+  # 契約社員には嘱託・有期雇用・期間従業員を含む（派遣社員・アルバイトは含まない）。
+  contract_career_ratio_exclude: 0.5
+  # 同じく、工場・生産部門（製造・生産管理・生産技術・品質管理・工場所属）の割合「以上」なら対象外。
+  factory_career_ratio_exclude: 0.5
   # 直近1年以内の転職（現職の在籍が1年未満）は対象外。0/未設定で無効。
   min_current_tenure_years: 1
   # 転職回数が多い人は対象外（この回数「以上」で除外。転職回数 = 勤務先数 - 1）。
