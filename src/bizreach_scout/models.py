@@ -61,13 +61,28 @@ class Education(str, Enum):
         return self.rank >= minimum.rank
 
 
+class EmploymentSegment(BaseModel):
+    """社内での役職・部署・プロジェクトごとの期間（レジュメの companyCareers 1件分）。"""
+
+    name: str = ""                 # 役職・部署・プロジェクト名
+    years: float | None = None     # その期間の長さ（年）。期間不明は None
+
+
 class Employment(BaseModel):
     """1社分の在籍履歴。"""
 
     company: str = ""
     title: str = ""
-    years: float | None = None  # 在籍年数
+    # 在籍年数 = 入社〜退職（在籍中は〜現在）。退職済みの会社も「入社〜今日」で数えていた
+    # 不具合（2014/4〜2018/3 の前職が12年扱い）を 2026-10 に修正した。
+    years: float | None = None
     industry: str = ""
+    is_current: bool = False       # 在籍中（退職年月が無い）か
+    # 雇用形態を表すフィールドがレジュメにあればその値（ビズリーチの入力欄に雇用形態は
+    # 無いとみられ、本番では未確認。あれば契約社員・個人事業主の判定に使う）。
+    employment_type: str = ""
+    # 社内の役職・部署ごとの期間。「キャリアの半分以上が◯◯」を役職単位で数えるのに使う。
+    segments: list[EmploymentSegment] = Field(default_factory=list)
 
 
 class Candidate(BaseModel):

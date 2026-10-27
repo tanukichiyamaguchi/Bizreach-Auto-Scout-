@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..foreign import has_country_tag, is_japanese_language_school, is_overseas_school_name
 from ..logging_config import logger
-from ..models import Candidate, Education, Employment, Gender
+from ..models import Candidate, Education, Employment, EmploymentSegment, Gender
 from .errors import BizreachAuthError
 
 _GRADE_MAP = {
@@ -356,15 +356,118 @@ def _extract_languages(resume: dict) -> str:
     return ""
 
 
+def _year_month(node: object, default_month: int) -> tuple[int, int] | None:
+    """{"year": 2018, "month": 4} を (2018, 4) にする。年が無ければ None。
+
+    year/month が文字列で返っても落ちないよう数値に直す。月が無いときは default_month。
+    """
+    if not isinstance(node, dict):
+        return None
+    try:
+        y = int(node.get("year") or 0)
+        m = int(node.get("month") or 0)
+    except (TypeError, ValueError):
+        return None
+    if y <= 0:
+        return None
+    return y, (m if 1 <= m <= 12 else default_month)
+
+
 def _years_since(period_from: dict | None, now: datetime | None = None) -> float | None:
-    if not period_from or "year" not in period_from:
+    """入社年月から現在までの年数（在籍中の会社用）。"""
+    start = _year_month(period_from, 1)
+    if start is None:
         return None
     now = now or datetime.now()
-    y = period_from.get("year")
-    mth = period_from.get("month") or 1
-    if not y:
+    return max(0.0, round((now.year - start[0]) + (now.month - start[1]) / 12.0, 1))
+
+
+def _period_years(period: dict | None, now: datetime | None = None) -> float | None:
+    """在籍期間の長さ（年）。退職年月があれば入社〜退職、無ければ入社〜現在。
+
+    以前は退職年月を無視して全社を「入社〜今日」で数えており、2014/4〜2018/3 の前職が
+    12年扱いになっていた（同一企業での勤続判定が甘くなり、文面生成にも誤った年数が
+    渡っていた）。退職済みは開始月・終了月を含めて数える（2021/4〜2023/9 = 2.5年）。
+    """
+    if not isinstance(period, dict):
         return None
-    return round((now.year - y) + (now.month - mth) / 12.0, 1)
+    start = _year_month(period.get("from"), 1)
+    if start is None:
+        return None
+    end = _year_month(period.get("to"), 12)
+    if end is None:
+        return _years_since(period.get("from"), now)
+    months = (end[0] - start[0]) * 12 + (end[1] - start[1]) + 1
+    return max(0.0, round(months / 12.0, 1))
+
+
+def _is_current(ce: dict) -> bool:
+    """在籍中の会社か（退職年月が無い。employmentStatus が Resigned なら在籍中ではない）。"""
+    if str(ce.get("employmentStatus") or "").lower() == "resigned":
+        return False
+    return _year_month((ce.get("period") or {}).get("to"), 12) is None
+
+
+# 職歴要素で「雇用形態」を表しうるキー（ビズリーチの入力欄に雇用形態は無いとみられ、
+# 本番では未確認）。employmentStatus は在籍中/退職済み（Employed/Resigned）で雇用形態ではない。
+_EMPLOYMENT_TYPE_KEYS = (
+    "employmentType", "employmentForm", "employmentPattern", "employmentCategory",
+    "contractType", "employeeType", "hiringType",
+)
+
+# 職歴の実構造を本番ログで確認するための記録（キー名と enum 値だけ。会社名等の値は出さない）。
+_logged_career_keys: set[str] = set()
+_logged_segment_keys: set[str] = set()
+_logged_employment_status: set[str] = set()
+_logged_job_category_keys: set[str] = set()
+
+
+def _log_career_structure(resume: dict) -> None:
+    """職歴（companyExperiences / companyCareers）と経験職種(jobCategories)の構造をログに出す。
+
+    雇用形態・部署を表すフィールドの有無を推測で埋めず、実データで確定するため
+    （要件定義書 5.4 の手順）。新しいキーが現れたときだけ出すので毎回は出ない。
+    """
+    for ce in resume.get("companyExperiences") or []:
+        if not isinstance(ce, dict):
+            continue
+        new = set(ce) - _logged_career_keys
+        if new:
+            _logged_career_keys.update(new)
+            logger.info("職歴(companyExperiences)のキー: %s", sorted(_logged_career_keys))
+        status = str(ce.get("employmentStatus") or "")
+        if status and status not in _logged_employment_status:
+            _logged_employment_status.add(status)
+            logger.info("職歴の employmentStatus 値を検出: %s", status)
+        for cc in ce.get("companyCareers") or []:
+            if isinstance(cc, dict) and (new := set(cc) - _logged_segment_keys):
+                _logged_segment_keys.update(new)
+                logger.info("社内経歴(companyCareers)のキー: %s", sorted(_logged_segment_keys))
+    for jc in resume.get("jobCategories") or []:
+        if isinstance(jc, dict) and (new := set(jc) - _logged_job_category_keys):
+            _logged_job_category_keys.update(new)
+            logger.info("経験職種(jobCategories)のキー: %s", sorted(_logged_job_category_keys))
+
+
+def _employment_type(ce: dict) -> str:
+    for k in _EMPLOYMENT_TYPE_KEYS:
+        v = ce.get(k)
+        text = (_ja(v) or _en(v)) if isinstance(v, dict) else (str(v).strip() if v else "")
+        if text:
+            return text
+    return ""
+
+
+def _segments(ce: dict, now: datetime | None) -> list[EmploymentSegment]:
+    """社内の役職・部署ごとの期間（companyCareers）。名前は ja→en の順で取る。"""
+    out: list[EmploymentSegment] = []
+    for cc in ce.get("companyCareers") or []:
+        if not isinstance(cc, dict):
+            continue
+        name = _ja(cc.get("name")) or _en(cc.get("name"))
+        if name:
+            out.append(EmploymentSegment(name=name, years=_period_years(cc.get("period"), now)))
+    return out
 
 
 def _career_text(ce: dict) -> str:
@@ -438,17 +541,23 @@ def resume_to_candidate(resume: dict, mrccid: str | None = None,
     employments: list[Employment] = []
     prior: list[str] = []
     career_blocks: list[str] = []
+    _log_career_structure(resume)
     for i, ce in enumerate(companies):
         name = _ja(ce.get("companyName"))
         title = _ja(ce.get("positionName"))
-        yrs = _years_since((ce.get("period") or {}).get("from"), now)
+        yrs = _period_years(ce.get("period"), now)
         if i == 0:
             current_company, current_title, current_tenure = name, title, yrs
         else:
             if name:
                 prior.append(name)
         if name:
-            employments.append(Employment(company=name, title=title, years=yrs, industry=""))
+            employments.append(Employment(
+                company=name, title=title, years=yrs, industry="",
+                is_current=_is_current(ce),
+                employment_type=_employment_type(ce),
+                segments=_segments(ce, now),
+            ))
         block = _career_text(ce)
         if name or block:
             career_blocks.append(f"■{name}（{title}）\n{block}".strip())

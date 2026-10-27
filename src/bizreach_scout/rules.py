@@ -46,6 +46,11 @@ class EligibilityRules(BaseModel):
     exclude_residency_status_mention: bool = True
     exclude_overseas_residence: bool = True
     exclude_unwanted_work_conditions: bool = True
+    # 職歴の種類による除外（career_types.py）。割合は在籍期間の合計に占める割合で、
+    # この値「以上」なら対象外。None で無効。
+    exclude_current_self_employed: bool = True
+    contract_career_ratio_exclude: float | None = Field(default=0.5, gt=0, le=1)
+    factory_career_ratio_exclude: float | None = Field(default=0.5, gt=0, le=1)
     # 有効にする勤務条件の判定（work_conditions.SIGNAL_KEYS のいずれか）。
     unwanted_work_conditions: list[str] = Field(
         default_factory=lambda: list(DEFAULT_WORK_CONDITION_SIGNALS))
