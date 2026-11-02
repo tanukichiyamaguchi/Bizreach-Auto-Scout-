@@ -159,6 +159,12 @@ class ScoutGenerator:
         messages: list[dict] = [{"role": "user", "content": _USER_INSTRUCTION}]
 
         resp, data, tool_block = self._call_ensuring_tool(system, messages)
+        missing = self._missing_fields(data)
+        if missing:
+            # 一部の項目だけ書いて emit_scout を呼ぶことがある（2026-11 Sonnet 5.5 の本番で発生）。
+            # 生成失敗にする前に、空の項目を伝えて1回だけ書き直させる。
+            resp, data, tool_block = self._retry_missing_fields(
+                system, messages, resp, tool_block, missing)
 
         scout = self._assemble(
             candidate, data, matches, intro_matches, resend_intro_matches, tone_key, company, rules
@@ -277,6 +283,26 @@ class ScoutGenerator:
             logger.warning("修正後も指摘が残りました。生成結果を採用します。")
         return scout2
 
+    @staticmethod
+    def _missing_fields(data: dict) -> list[str]:
+        return [k for k in _REQUIRED_FIELDS if not str(data.get(k, "")).strip()]
+
+    def _retry_missing_fields(self, system: str, messages: list[dict], resp, tool_block,
+                              missing: list[str]):
+        """必須項目が空の emit_scout 出力を、空の項目を伝えて1回だけ書き直させる。"""
+        logger.warning("emit_scout の必須項目が空のため書き直しを依頼します: %s", "、".join(missing))
+        messages.append({"role": "assistant", "content": resp.content})
+        messages.append({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_block.id,
+                "content": ("次の項目が空または欠落しています: " + "、".join(missing)
+                            + "\nすべての項目を埋めて、再度 emit_scout を呼び出してください。"),
+            }],
+        })
+        return self._call_ensuring_tool(system, messages)
+
     def _assemble(
         self,
         candidate: Candidate,
@@ -288,7 +314,7 @@ class ScoutGenerator:
         company: dict,
         rules: dict,
     ) -> GeneratedScout:
-        missing = [k for k in _REQUIRED_FIELDS if not str(data.get(k, "")).strip()]
+        missing = self._missing_fields(data)
         if missing:
             raise GenerationError(
                 "emit_scout の必須フィールドが欠落/空です: " + "、".join(missing)

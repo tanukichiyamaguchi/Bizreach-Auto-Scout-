@@ -59,6 +59,27 @@ def test_missing_required_field_raises_generation_error():
         gen.generate(make_candidate(), matches=[])
 
 
+def test_missing_required_fields_are_retried_once_before_failing():
+    """一部の項目だけ書いた emit_scout は、空の項目を伝えて1回だけ書き直させる（Sonnet 5.5 の本番で発生）。"""
+    partial = {k: v for k, v in VALID_INPUT.items()
+               if k not in ("company_intro", "career_body", "resend_body")}
+    calls: list = []
+
+    def _create(**kwargs):
+        calls.append(dict(kwargs, messages=list(kwargs["messages"])))  # 送った時点の会話を保存
+        payload = partial if len(calls) == 1 else VALID_INPUT
+        block = SimpleNamespace(type="tool_use", name="emit_scout", input=payload, id=f"t{len(calls)}")
+        return SimpleNamespace(content=[block])
+
+    gen = ScoutGenerator(
+        client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
+    scout = gen.generate(make_candidate(), matches=[])
+    assert scout is not None
+    retry_msg = calls[1]["messages"][-1]["content"][0]
+    assert retry_msg["type"] == "tool_result" and retry_msg["tool_use_id"] == "t1"
+    assert "company_intro" in retry_msg["content"] and "resend_body" in retry_msg["content"]
+
+
 def test_generate_produces_two_messages():
     gen = ScoutGenerator(client=_fake_client(VALID_INPUT), model="test-model")
     scout = gen.generate(make_candidate(), matches=[])

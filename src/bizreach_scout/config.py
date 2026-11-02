@@ -57,8 +57,10 @@ class Settings(BaseSettings):
     #     この値は「思考トークン数」ではなく単なる ON/OFF フラグとして扱う。
     thinking_budget_tokens: int = 8000
     # 思考の深さ/全体のトークン量: low | medium | high | xhigh | max（adaptive時に使用）。
-    # Sonnet 5.5 の既定は high（Opus 5.5 は medium）。これまでと同じ medium を明示して送る。
-    thinking_effort: str = "medium"
+    # Sonnet 5.5 は medium だと本番で項目の書き漏れが続いた（2026-11-02: 5名中4名で
+    # 紹介文・本文の欠落。Opus 5.5 の medium は 10/30・11/01 の12名で0件）。Sonnet 5.5 の
+    # 既定でもある high を明示して送る。
+    thinking_effort: str = "high"
 
     # 送信制御
     dry_run: bool = True
