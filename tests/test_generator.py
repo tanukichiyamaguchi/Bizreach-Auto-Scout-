@@ -95,24 +95,24 @@ def test_extended_thinking_enabled_passes_adaptive_and_auto_tool_choice():
         gen.generate(make_candidate(), matches=[])
     finally:
         gen._settings.thinking_budget_tokens = orig
-    # Opus 4.8 では adaptive thinking を使う（budget_tokens形式は400になる）。
+    # adaptive thinking を使う（budget_tokens形式は近年のモデルで400になる）。
     assert captured["thinking"] == {"type": "adaptive"}
     assert captured["output_config"]["effort"]  # 深さは effort で制御
-    assert captured["tool_choice"] == {"type": "auto"}  # 拡張思考時は強制tool_choice不可
+    assert captured["tool_choice"] == {"type": "auto"}  # 強制tool_choiceは Sonnet 5.5 で400
 
 
-def test_thinking_falls_back_to_forced_tool_when_no_tool_output():
-    # adaptive(auto)でツール未出力なら、思考なし＋強制toolで確実に取得する。
+def test_missing_tool_output_is_retried_with_reminder_not_forced_tool():
+    # auto でツール未出力なら、強制 tool_choice（Sonnet 5.5 / Opus 5.5 で400）は使わず、
+    # system に「emit_scout を呼ぶ」指示を足して取り直す。
     calls: list = []
     tool_block = SimpleNamespace(type="tool_use", name="emit_scout", input=VALID_INPUT, id="t1")
     tool_resp = SimpleNamespace(content=[tool_block])
     text_resp = SimpleNamespace(content=[SimpleNamespace(type="text", text="…")])
 
     def _create(**kwargs):
-        tc = kwargs.get("tool_choice")
-        calls.append(tc)
-        forced = tc == {"type": "tool", "name": "emit_scout"}
-        return tool_resp if forced else text_resp
+        calls.append(kwargs)
+        reminded = "必ず emit_scout ツールを1回呼び出して" in kwargs["system"]
+        return tool_resp if reminded else text_resp
 
     gen = ScoutGenerator(
         client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
@@ -123,11 +123,12 @@ def test_thinking_falls_back_to_forced_tool_when_no_tool_output():
     finally:
         gen._settings.thinking_budget_tokens = orig
     assert scout is not None
-    assert calls[0] == {"type": "auto"}                       # 1回目: 拡張思考(auto)
-    assert calls[1] == {"type": "tool", "name": "emit_scout"}  # 2回目: 強制toolフォールバック
+    assert all(c["tool_choice"] == {"type": "auto"} for c in calls)
+    assert "必ず emit_scout" not in calls[0]["system"]
+    assert "必ず emit_scout" in calls[1]["system"]
 
 
-def test_thinking_disabled_uses_forced_tool_choice():
+def test_thinking_disabled_still_uses_auto_tool_choice():
     captured: dict = {}
     gen = ScoutGenerator(client=_capturing_client(captured), model="test-model")
     orig = gen._settings.thinking_budget_tokens
@@ -137,7 +138,7 @@ def test_thinking_disabled_uses_forced_tool_choice():
     finally:
         gen._settings.thinking_budget_tokens = orig
     assert "thinking" not in captured
-    assert captured["tool_choice"] == {"type": "tool", "name": "emit_scout"}
+    assert captured["tool_choice"] == {"type": "auto"}
 
 
 def test_subject_normalized_when_prefix_missing():
@@ -315,7 +316,7 @@ def test_missing_resend_consultant_intro_lead_triggers_retry():
 
 def test_validation_retry_survives_missing_tool_output_itself():
     # 検証リトライ(2回目)自体がadaptive+autoでツール未出力になっても、
-    # 強制tool_choiceフォールバックで復旧しクラッシュしないことを確認する
+    # 「emit_scout を呼ぶ」指示つきの取り直しで復旧しクラッシュしないことを確認する
     # （_call_ensuring_tool を検証リトライ経路にも適用した回帰テスト）。
     matches = [ConsultantMatch(consultant=_INOUE, common_points=["共通点"])]
     incomplete = dict(VALID_INPUT, consultant_intro_lead="", consultant_intros=[])
@@ -342,7 +343,8 @@ def test_validation_retry_survives_missing_tool_output_itself():
         client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
     scout = gen.generate(make_candidate(), matches=matches)  # 例外を送出せず完了すること
 
-    assert len(calls) == 3  # 1回目→検証リトライ(auto失敗)→強制toolで復旧
+    assert len(calls) == 3  # 1回目→検証リトライ(ツール未出力)→指示つきで復旧
+    assert all(c["tool_choice"] == {"type": "auto"} for c in calls)
     assert "▼井ノ上 貴之 プロフィール" in scout.first.body
 
 
@@ -394,3 +396,42 @@ def test_false_commonality_issue_detected_for_non_common_match():
     ok = {"consultant_intros": [
         {"consultant_id": "x1", "blurb": "当社で活躍する医院経営分野のコンサルタントです。"}]}
     assert ScoutGenerator._false_commonality_issues(ok, [fallback], []) == []
+
+
+def test_sonnet_5_5_uses_server_side_refusal_fallback():
+    """Sonnet 5.5 では誤判定の拒否に備えて、サーバー側フォールバック（beta）を付けて呼ぶ。"""
+    captured: dict = {}
+    block = SimpleNamespace(type="tool_use", name="emit_scout", input=VALID_INPUT, id="t1")
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(content=[block], stop_reason="tool_use")
+
+    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=_create)))
+    gen = ScoutGenerator(client=client, model="claude-sonnet-5-5")
+    gen.generate(make_candidate(), matches=[])
+    assert captured["model"] == "claude-sonnet-5-5"
+    assert captured["betas"] == ["server-side-fallback-2026-07-01"]
+    assert captured["fallbacks"] == "default"
+    assert captured["tool_choice"] == {"type": "auto"}
+    assert "temperature" not in captured and "top_p" not in captured
+
+
+def test_refusal_is_reported_as_generation_error():
+    """拒否（stop_reason=refusal）は、ツール未出力の取り直しをせず理由つきの生成失敗にする。"""
+    import pytest
+
+    from bizreach_scout.generation.generator import GenerationError
+
+    calls: list = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(content=[], stop_reason="refusal",
+                               stop_details=SimpleNamespace(category="general_harms"))
+
+    gen = ScoutGenerator(
+        client=SimpleNamespace(messages=SimpleNamespace(create=_create)), model="test-model")
+    with pytest.raises(GenerationError, match="general_harms"):
+        gen.generate(make_candidate(), matches=[])
+    assert len(calls) == 1
