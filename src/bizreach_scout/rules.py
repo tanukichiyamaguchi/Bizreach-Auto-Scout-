@@ -51,6 +51,8 @@ class EligibilityRules(BaseModel):
     exclude_current_self_employed: bool = True
     contract_career_ratio_exclude: float | None = Field(default=0.5, gt=0, le=1)
     factory_career_ratio_exclude: float | None = Field(default=0.5, gt=0, le=1)
+    # キャリアの中に公務員（官公庁・自治体・警察・消防・自衛隊・公立学校/病院）があれば対象外。
+    exclude_public_sector_career: bool = True
 
     @field_validator("contract_career_ratio_exclude", "factory_career_ratio_exclude",
                      mode="before")

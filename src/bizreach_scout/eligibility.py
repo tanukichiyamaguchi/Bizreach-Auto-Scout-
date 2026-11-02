@@ -7,6 +7,7 @@
 
 職歴の種類（詳細は career_types.py。通常スカウト・ピックアップの両方）:
 - 現職が個人事業主 / キャリアの半分以上が契約社員 / 半分以上が工場・生産部門
+- キャリアの中に公務員がある（期間・現職か過去かを問わない）
 
 勤務条件の判定（詳細は work_conditions.py）:
 - 既定で 出張不可 / 残業なし希望 / 在宅勤務希望（転勤NGは自社求人が「転勤なし」のため既定で無効）
@@ -24,7 +25,12 @@
 
 from __future__ import annotations
 
-from .career_types import contract_ratio, factory_ratio, is_current_self_employed
+from .career_types import (
+    contract_ratio,
+    factory_ratio,
+    has_public_sector_career,
+    is_current_self_employed,
+)
 from .config import scout_rules
 from .foreign import (
     has_foreign_native_language,
@@ -172,6 +178,9 @@ def check_eligibility(candidate: Candidate, rules: dict | None = None,
         ratio = ratio_fn(candidate)
         if ratio is not None and ratio >= limit - 1e-9:
             failed.append(f"キャリアの{ratio:.0%}が{label}のため対象外（{limit:.0%}以上）")
+    # キャリアの中に公務員があれば、期間・現職か過去かを問わず対象外。
+    if cfg.get("exclude_public_sector_career", True) and has_public_sector_career(candidate):
+        failed.append("職歴に公務員（官公庁・自治体・警察・消防・自衛隊・公立学校など）があるため対象外")
 
     # --- 同一企業での勤続年数 -------------------------------------------------
     min_years = cfg.get("min_same_company_years", 2.5)

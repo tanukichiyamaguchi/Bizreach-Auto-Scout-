@@ -38,8 +38,8 @@ _CORPORATE_RE = re.compile(
 )
 # 括弧の種類をそろえる（【業務委託】［契約］「工場」も丸括弧として扱う）。
 _TRANS = str.maketrans(
-    "０１２３４５６７８９ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ（）【】［］〔〕「」",
-    "0123456789abcdefghijklmnopqrstuvwxyz()()()()()",
+    "０１２３４５６７８９ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ（）【】［］〔〕「」｜",
+    "0123456789abcdefghijklmnopqrstuvwxyz()()()()()|",
 )
 # 「(株)」「㈱」などの略記。括弧として分割すると「株」だけが残り、社名（「山田工場」）が
 # 法人格の無い工場名に見えてしまうため、先に法人格の語へ戻す。
@@ -474,3 +474,353 @@ def factory_ratio(candidate: Candidate) -> float | None:
         is_factory_role,
     )
     return hit / total if total > 0 else None
+
+
+# --- 4. 公務員 ------------------------------------------------------------------
+# 運用者指示（2026-11）: キャリアの中に公務員がある人は対象外（期間・現職か過去かを問わない）。
+# 公務員 = 国・地方公共団体に任用される職員（一般職・特別職、正規・非正規を問わない）。
+# 中央省庁・出先機関・裁判所・国会・在外公館、都道府県庁・市区町村役所/役場・議会・
+# 教育委員会・公営企業、警察・消防・自衛隊、公立の学校/病院/保育所、一部事務組合。
+# 独立行政法人・国立大学法人・公立大学法人・地方独立行政法人・特殊法人・公益法人・社会福祉協議会・
+# 民営化した会社（日本郵便・JR・NTT など）は法人で、職員は公務員ではないため数えない。
+# 民間から官公庁への出向・派遣・常駐・業務委託・指定管理の職歴も、雇い主は民間なので数えない
+# （公務員が別の官公庁へ出向・派遣された職歴は公務員）。
+#
+# 判定の順序（誤除外を避けるため、役職欄の機関名は「勤務先を伏せた人」のときだけ数える）:
+# 1. 役職欄の本人の経歴の付記（「元自衛官」「前職：横浜市役所」「自衛隊出身」「市役所を経て入社」）
+# 2. 出向・派遣・委託などの付記（出向元が民間なら民間、公的機関なら公務員）
+# 3. 役職欄だけで公務員と分かる職（議員・公設秘書・会計年度任用職員）
+# 4. 会社名欄が公的機関（先頭の語。法人格・民間の施設を示す語が無い）
+# 5. 会社名を伏せた人（「-」「非公開」）の役職欄の機関名・公務員の職名
+# 民間の会社名（「富士通」「千葉銀行」のように法人格を省いて書く人が多い）の役職欄に出る
+# 「防衛省向け」「国土交通省発注工事」「県庁支店」「公務員の転職支援」は仕事の対象なので数えない。
+
+# 中央省庁（略称・再編前の旧省庁名・内閣官房/各省の機関を含む）。「環境省エネ」は数えない。
+_MINISTRY = (
+    r"(?:内閣府|内閣官房|内閣法制局|内閣サイバーセキュリティセンター|内閣情報調査室|国家安全保障局"
+    r"|総務省|法務省|外務省|財務省|文部科学省|厚生労働省|農林水産省|経済産業省|国土交通省|環境省|防衛省"
+    r"|復興庁|デジタル庁|宮内庁|警察庁|金融庁|消費者庁|こども家庭庁|国税庁|特許庁|気象庁|海上保安庁"
+    r"|観光庁|林野庁|水産庁|資源エネルギー庁|中小企業庁|文化庁|スポーツ庁|消防庁|公安調査庁"
+    r"|出入国在留管理庁|防衛装備庁|原子力規制庁|会計検査院|人事院|国土地理院|証券取引等監視委員会"
+    r"|(?:公正取引|個人情報保護|原子力規制|国家公安|運輸安全|中央労働)委員会|公取委"
+    r"|経産省|厚労省|国交省|文科省|農水省|通産省"
+    r"|大蔵省|通商産業省|郵政省|建設省|運輸省|厚生省|労働省|文部省|自治省|農林省|総理府|総務庁"
+    r"|防衛庁|環境庁|経済企画庁|科学技術庁|国土庁|北海道開発庁|沖縄開発庁|社会保険庁|防衛施設庁"
+    r"|郵政事業庁)(?!エネ)"
+)
+# 公的機関の名前。
+_PUBLIC_BODY = (
+    rf"{_MINISTRY}"
+    r"|(?:都|道|府|県)庁|(?:市|区)役所|(?<!公証)役場|議会事務局|(?:都|道|府|県|市|区|町|村)議会(?!議員)"
+    r"|教育委員会|教育庁|(?:都|道|府|県)教育局|選挙管理委員会|人事委員会|企業庁|企業局"
+    r"|水道局|下水道局|交通局|病院局|港務局|(?:都|市|県|町|村)営(?:バス|地下鉄|交通|電車|水道|病院|渡船)"
+    r"|(?:都|道|府|県)税事務所|国税事務所|土木事務所|農林(?:水産)?事務所|児童相談所|福祉事務所"
+    r"|保健福祉事務所|家畜保健衛生所|保健所|(?<!産業)保健センター|消防(?:局|本部|署|学校|大学校)"
+    r"|一部事務組合|広域連合|(?:総合|地域)?振興局"
+    r"|警察(?:署|本部|学校|大学校)|(?:都|道|府|県)警察|(?:県|府)警(?!備)|(?<![鉄水])道警(?!備)|警視庁"
+    r"|皇宮警察|管区警察局|交番|駐在所|(?:衆|参)議院(?!議員)|国立国会図書館|国会図書館|裁判所"
+    r"|(?:地|高|家|簡)裁|(?:最高|高|区)検|(?<!生)地検(?!品|査)|検察庁|検察審査会|法務局"
+    r"|(?<![人費関得与])税関(?![連係])|国税局|税務署|国税不服審判所|労働局|労働基準監督署|労基署"
+    r"|ハローワーク(?!ス)|公共職業安定所|地方整備局|運輸(?:支)?局|財務(?:支)?局|財務事務所|経済産業局"
+    r"|農政局|森林管理(?:局|署)|地方環境事務所|航空局|航空交通管制部|北海道開発局|開発建設部"
+    r"|(?:地方)?厚生(?:支)?局|総合通信局|(?:河川国道|国道|河川|港湾|空港|港湾空港整備|砂防|ダム|営繕)事務所"
+    r"|社会保険事務所|検疫所|植物防疫所|動物検疫所|刑務所|拘置所|少年院|少年鑑別所|矯正管区|保護観察所"
+    r"|公安調査局|入国管理局|入国管理センター|出入国在留管理局|入管|海上保安(?:部|署|本部|学校|大学校)"
+    r"|海保|気象台|(?:税務|自治|気象|国土交通|農業|水産)大学校|国立感染症研究所|国土技術政策総合研究所"
+    r"|自衛隊|(?:陸|海|空)自(?![動治然由己立律])|(?:統合|陸上|海上|航空)幕僚監部|(?:陸|海|空|統)幕"
+    r"|地方総監部|駐屯地|分屯地|防衛局|防衛施設局|防衛大学校|防衛医科大学校|防衛医大|防衛研究所"
+    r"|地方協力本部|在外公館|(?<!駐)日本(?:国)?(?:大使館|総領事館|領事館|政府代表部)"
+    r"|^在(?!日)[^\s()]{1,12}?(?:大使館|総領事館|領事館)"
+    r"|(?:都|道|府|県|市|区|町|村)立(?![^\s()]*(?:大学(?!校)|医大|市大|府大|県大|大附属|大病院"
+    r"|高等専門学校|高専))[^\s()]{0,12}?"
+    r"(?:学校|小学校|中学校?|高等学校|高校|中等教育学校|特別支援学校|養護学校|大学校|技術校|専門校"
+    r"|病院|医療センター|センター|診療所|図書館|博物館|美術館|公民館|児童館|保育所|保育園|幼稚園"
+    r"|こども園|(?<=[^\s()])(?:小|中|高)(?=$|\s|\())"
+    r"|公立(?!大学)[^\s()]{0,10}?(?:学校|中学|高校|幼稚園|保育所|保育園|こども園|図書館|病院|医療センター)"
+    r"|(?:市|町|村)民病院|国民健康保険[^\s()]{0,6}?(?:病院|診療所)|国保[^\s()]{0,6}?(?:病院|診療所)"
+)
+_PUBLIC_BODY_RE = re.compile(_PUBLIC_BODY)
+# 会社名欄の先頭にあれば、後ろの語（「大学振興課」「国立大学法人支援課」「総合研究所」）に関係なく公的機関。
+_PUBLIC_START_RE = re.compile(
+    rf"^(?:{_MINISTRY}|国立感染症研究所|国土技術政策総合研究所|防衛研究所|防衛医大|防衛医科大学校"
+    r"|防衛大学校|(?:税務|自治|気象|国土交通|消防|海上保安|警察)大学校)"
+)
+# 英語表記の公的機関（会社名欄だけで見る）。
+_PUBLIC_EN_RE = re.compile(
+    r"ministry of (?!supply)|embassy of japan|consulate[- ]general of japan|permanent mission of japan"
+    r"|self[- ]defen[cs]e forces?|(?<![a-z])(?:jgsdf|jmsdf|jasdf|meti|mofa|mhlw|mext|mlit|maff)(?![a-z])"
+    r"|metropolitan government|prefectural (?:government|office|police|board of education)"
+    r"|(?<![a-z])prefecture$|^[a-z]+ (?:city|prefectural|metropolitan) (?:government|hall|office)"
+    r"|city (?:hall|government|office)|ward office|town office|village office|^city of [a-z]"
+    r"|^[a-z]+ city$|^(?:hokkaido|tokyo|osaka|kyoto) (?:government|metropolitan)"
+    r"|board of education|fire department|police department|^(?:tokyo|osaka|yokohama|kobe|nagoya) customs"
+    r"|national police agency|metropolitan police|japan coast guard|cabinet (?:office|secretariat)"
+    r"|national tax agency|regional taxation bureau|(?:district|high|supreme|family) court"
+    r"|public prosecutors? office|japan patent office|financial services agency|^(?:japan )?digital agency$"
+)
+# 公務員の職名（会社名を伏せた人の役職欄・経歴の付記で見る）。「準公務員」「みなし公務員」は数えない。
+_PUBLIC_ROLE = (
+    r"(?<!準)(?<!みなし)(?:地方|国家)?公務員|自衛官|官僚|警察官|警察職員|刑事(?!事件|弁護|訴訟|法|責任)"
+    r"|巡査(?:部長|長)?|警部(?:補)?|警視(?!庁)(?:正|長|監)?|消防(?:士|吏員|官|職員|隊員)|刑務官"
+    r"|入国(?:審査|警備)官|保護観察官|航空管制官|国税(?:専門|調査)官|税務(?:署)?職員|食品衛生監視員"
+    r"|麻薬取締官|労働基準監督官|海上保安官|裁判官|判事|検事|検察官|書記官|事務官|技官|外交官"
+    r"|公設(?:第[一二12])?秘書|政策(?:担当)?秘書"
+    r"|(?:衆議院|参議院|国会|(?:都|道|府|県|市|区|町|村)議会|地方)\s?議員|(?:都|道|府|県|市|区|町|村)議(?!会)"
+    r"|(?:自治体|(?:市|区)役所|役場|(?:都|道|府|県)庁|(?:市|区|町|村|県|都|府|(?<![鉄水])道)(?:の)?)職員"
+    r"|(?:都|道|府|県|市|区|町|村)教職員|行政職員?|会計年度任用(?:職員)?|臨時的任用(?:職員|教員|講師)?"
+    r"|任期付職員|期間業務職員|[0-9一二三]等(?:陸|海|空)(?:佐|尉|曹|士)|(?:陸|海|空)(?:将補?|曹長|士長)"
+)
+_PUBLIC_ROLE_RE = re.compile(_PUBLIC_ROLE)
+# 役職欄だけで公務員と分かる職（議員・公設秘書・自治体の非正規の任用）。会社名欄に議員事務所や
+# 政党名を書く人がいるため、勤務先が法人でなければ数える。
+_PUBLIC_OFFICE_RE = re.compile(
+    r"公設(?:第[一二12])?秘書|政策(?:担当)?秘書"
+    r"|(?:衆議院|参議院|国会|(?:都|道|府|県|市|区|町|村)議会|地方)\s?議員"
+    r"|会計年度任用(?:職員)?|臨時的任用(?:職員|教員|講師)?|任期付職員|期間業務職員"
+)
+# 伏せた書き方。単独の「県」「市」は「某県」「某市」のときだけ。
+_PUBLIC_GENERIC = (
+    r"官公庁|中央官庁|官庁|中央省庁|省庁|地方自治体|自治体|地方公共団体|政令(?:指定)?都市|政令市"
+    r"|政府機関|国家機関|国の(?:行政)?機関|行政機関|警察|消防(?!設備|用品|機器|点検|器具)|自衛隊"
+    r"|公立(?!大学)|(?:都|道|府|県|市|区|町|村)立(?=$|\))"
+)
+_PUBLIC_GENERIC_RE = re.compile(
+    rf"^(?:某|都内の?|県内の?|市内の?|関東の?|関西の?|地方の?|首都圏の?)?(?:{_PUBLIC_GENERIC})$"
+    r"|^某(?:県|市|区|町|村|省|官庁)$"
+    r"|^(?:地方|国家)?公務員(?:\s*[^\s()]{0,8})?$|^(?:衆議院|参議院|国会|地方)議員$"
+)
+# 会社名欄が自治体名そのもの、または自治体名に部局名を続けたもの
+# （「横浜市」「神奈川県横浜市」「東京都総務局人事部人事課」「横浜市職員」「岩手郡雫石町」）。
+# 区・町・村だけで始まるものは、民間の名前と紛れやすいので部局・役所の語が続く形に限る。
+_PREF = r"(?:北海道|東京都|京都府|大阪府|[一-龥]{2,3}県)"
+_CITY = r"(?!都市)[一-龥ぁ-ゖァ-ヶ々]{1,7}?市(?!場)"
+_WARD_TOWN = r"[一-龥ぁ-ゖァ-ヶ々]{1,6}?(?:区|町|村)"
+# 「中村」「西村」のような名字や「ドイツ村」「映画村」のような施設は町村名とみなさない。
+_NOT_VILLAGE = (
+    r"(?![中田木北西野松今岡川吉上下河藤奥島三植大小山杉森沢澤梅竹宮]村(?:$|[^\s]))(?!大手町$)"
+    r"(?![^\s]*(?:江戸|映画|明治|民俗|ドイツ|スペイン|オランダ|カナダ|ムーミン|フルーツ|ワイン|リゾート"
+    r"|選手|ハーブ|琉球|時代)村)"
+)
+_GUN = r"[一-龥]{1,4}郡"
+_UNIT_CHARS = r"[一-龥ぁ-ゖァ-ヶ々ー・a-z0-9]{0,30}?"
+_BROAD_UNIT = (rf"{_UNIT_CHARS}(?:局|部|課|室|係|班|担当|グループ|庁|事務所|出張所|支所|事務局|議会"
+               r"|委員会|本部|署|役所|役場|庁舎|図書館|公民館|児童館|市場|保育所|保育園|診療所|職員|教職員)")
+_STRONG_UNIT = (rf"{_UNIT_CHARS}(?:局|部|課|室|役所|役場|議会|委員会|庁舎|出張所|支所|図書館|公民館"
+                r"|児童館|保育所|保育園|診療所|職員)")
+_PUBLIC_PLACE_RE = re.compile(
+    rf"^(?:{_PREF}(?:{_GUN})?(?:{_CITY}|{_WARD_TOWN})?(?:{_WARD_TOWN})?(?:{_BROAD_UNIT})?"
+    rf"|{_CITY}(?:{_WARD_TOWN})?(?:{_BROAD_UNIT})?"
+    rf"|(?:{_GUN})?{_NOT_VILLAGE}{_WARD_TOWN}(?:{_STRONG_UNIT})?)$"
+)
+# 法人格（公的機関でない）。「法人課税部門」のような部署名の「法人」は数えない。
+_LEGAL_ENTITY_RE = re.compile(
+    r"株式会社|有限会社|合同会社|合資会社|合名会社|相互会社"
+    r"|(?:社団|財団|医療|学校|社会福祉|宗教|独立行政|国立大学|公立大学|地方独立行政|国立研究開発"
+    r"|特定非営利活動|特殊|認可|npo|税理士|弁護士|監査|司法書士|行政書士|社会保険労務士|弁理士"
+    r"|土地家屋調査士|農事組合|一般社団|一般財団|公益社団|公益財団|技術研究組合)法人"
+    r"|協同組合|共済組合|健康保険組合|労働組合|信用組合|機構|協会|協議会|財団|公社|公団|事業団|基金"
+    r"|振興会|連合会|中央会|商工会|医師会|薬剤師会|社協|シルバー人材センター"
+    r"|(?<![a-z])(?:inc|ltd|llc|corp|corporation|gmbh|plc)(?![a-z])"
+    r"|co\.?,?\s*ltd|(?<![a-z])k\.?k\.?(?![a-z])|コーポレーション|ホールディングス"
+)
+# 法人格はあるが公的機関（一部事務組合・広域連合・企業団の職員は地方公務員）。
+_PUBLIC_UNION_RE = re.compile(
+    r"(?:消防|(?<!保険)事務|広域行政|広域市町村圏|衛生|環境衛生|衛生施設|清掃施設|清掃|環境施設|病院"
+    r"|学校|資源環境|競馬|退職手当)組合|港管理組合|広域連合|(?<!中小)企業団(?!体|地)"
+)
+# 会社名欄の先頭の語が民間の施設・団体であることを示す語（公立大学法人の病院の略称、済生会・医師会の
+# 病院、庁舎内や庁舎前の店・郵便局、銀行の県庁支店）。
+_PRIVATE_HEAD_RE = re.compile(
+    r"銀行|証券|信用金庫|信金|信用組合|労働金庫|bank|大学(?!校)|医大|市大|府大|県大|高等専門学校|高専"
+    r"|郵便局|クリニック|医院|歯科|薬局|ホテル|売店|済生会|医師会|厚生連|赤十字|日赤|労災"
+    r"|総合研究所|総研|(?:庁|役所|役場|署)(?:前|内)|(?:庁|役所)店|前店"
+    r"|(?:法律|会計|税理士|特許|設計|司法書士|行政書士|社会保険労務士|社労士|建築|デザイン|監査|経営)事務所"
+    r"|向け|関連会社|ベンチャー|ファーム|ベンダー|(?<![a-z])(?:sier|ses)(?![a-z])"
+)
+# 民間の立場で公的機関に勤めたことを示す付記（会社名欄・役職欄。区切られた語として出るもの）。
+_PRIVATE_STATUS_RE = re.compile(
+    r"(?:^|(?<=[\s(、,・/／|]))(?:派遣|人材派遣|派遣社員|派遣スタッフ|派遣職員|派遣契約|業務委託|委託"
+    r"|外部委託|受託|受託会社|委託会社|委託事業|請負|常駐|出向|民間出向|アウトソーシング|bpo)"
+    r"(?=$|[\s)、,・/／|(]|として|にて)"
+    r"|業務委託(?:先|会社|契約社員)|指定管理(?!者制度)|公設民営|として参画|私設|派遣会社|人材派遣"
+    r"|派遣員|派遣先|常駐先"
+    r"|パソナ|リクルートスタッフィング|テンプスタッフ|パーソル|アデコ|マンパワー|ランスタッド"
+    r"|スタッフサービス|ヒューマンリソシア|インタラック"
+)
+# 出向・派遣の向き。「〇〇から/より出向」「出向元：〇〇」は出向元が公的機関なら公務員、
+# 「〇〇へ出向」「被災地へ派遣」「PKO派遣」は元の組織（会社名欄）の職員。
+_FROM_SECONDMENT_RE = re.compile(
+    r"([^\s()、,：:・/／]{1,30}?)(?:より|から)(?:の)?(?:出向|派遣)|(?:出向|派遣)元\s*[:：]?\s*([^\s()、,]+)"
+)
+_TO_SECONDMENT_RE = re.compile(
+    r"へ(?:の)?(?:出向|派遣)|派遣(?:施設)?隊|(?:pko|災害|被災地|国際緊急援助)\S{0,4}派遣|兼務|兼任"
+)
+# 勤務先を伏せた書き方。
+_HIDDEN_COMPANY_RE = re.compile(
+    r"^(?:|[-ー―‐—－−/]+|n/?a|none|なし|[*＊×○〇]+"
+    r"|(?:社名|企業名|会社名|勤務先|所属)?(?:は)?(?:非公開|非公表|非開示|匿名|秘匿)(?:企業|会社)?"
+    r"|[^\s()]{0,12}のため非公開)$"
+)
+# 伏せた勤務先の括弧書きが民間を示す語（「非公開（IT企業）」）。
+_PRIVATE_NOTE_RE = re.compile(
+    r"企業|会社|メーカー|商社|銀行|ベンダー|sier|ses|ベンチャー|コンサル|(?<![a-z])it(?![a-z])|メディア"
+    r"|派遣|委託|請負|受託|常駐"
+)
+# 公的機関の下の組織（会社名欄の先頭がこれで、括弧に機関名を書く形「第1空挺団（陸上自衛隊）」
+# 「西谷浄水場（横浜市水道局）」「みなと中学校（横浜市立）」）。
+_ORG_UNIT_HEAD_RE = re.compile(
+    r"(?:部|局|課|室|係|班|所|署|団|隊|群|基地|駐屯地|分屯地|学校|校|高|中|小|院|館|園|場|センター"
+    r"|本部|艦|事務所|庁舎|交番)$|^護衛艦|^第[0-9一二三四五六七八九十]+"
+)
+_FACILITY_HEAD_RE = re.compile(
+    r"(?:学校|高校|中学校|小学校|中|高|小|病院|医療センター|診療所|保育園|保育所|図書館|幼稚園|こども園"
+    r"|公民館|児童館|博物館|美術館|技術校|専門校|大学校)$"
+)
+# 民間の職歴の役職欄に書かれた本人の経歴（「元自衛官」「前職：横浜市役所」「自衛隊出身」
+# 「国税OB」「市役所勤務を経て入社」「警察官として10年勤務後」「横浜市役所より出向」）。
+# 地名だけの「前職：京都銀行」「元都市銀行」「前職：埼玉県の商社」は経歴とみなさない。
+# 公立学校・公立病院の職（「元教員（公立中学校）」「前職：教員（公立）」）。
+_PUBLIC_JOB_NOTE = (
+    r"(?:教員|教諭|講師|保育士|看護師|職員)\((?:[^()]{0,8}?(?:都|道|府|県|市|区|町|村)立|公立)[^()]{0,8}\)"
+)
+_PAST_GENERIC = (
+    r"官公庁|中央官庁|官庁|中央省庁|省庁|地方自治体|自治体|地方公共団体|国家機関|政府機関|行政機関"
+    r"|自衛隊|警察(?!犬)|消防(?!設備|用品|機器|点検|器具)|国税|検察"
+)
+_PUBLIC_PAST_NAME = (
+    rf"(?:{_PUBLIC_JOB_NOTE}|{_PUBLIC_BODY}|{_PUBLIC_ROLE}|{_PAST_GENERIC}"
+    rf"|{_PREF}(?=$|[\s)、,・/／|]|を経|出身|勤務|職員)|{_CITY}(?=$|[\s)、,・/／|]|を経|勤務|職員))"
+)
+_PAST_PREFIX_RE = re.compile(
+    r"(?:^|(?<=[\s(、,・/／|※:：]))(?:元(?!請|受|締|本|祖|気|来|旦|日|号|年|々|の)\s*[・:：]?\s*"
+    r"|前(?:々|前)?職\s*\)?\s*[:：/／]?\s*)"
+    rf"[一-龥ぁ-ゖァ-ヶ々a-z0-9]{{0,8}}?{_PUBLIC_PAST_NAME}(?!在住|出身)"
+)
+_PAST_SUFFIX_RE = re.compile(
+    rf"{_PUBLIC_PAST_NAME}(?:\([^()]{{0,16}}\))?"
+    r"(?:勤務|に[^\s()]{0,6}?在籍|として[^\s()]{0,8}?勤務|にて[^\s()]{0,8}?勤務)?"
+    r"(?:後|を経て|出身|ob|og|より転職|から転職|を(?:任期満了)?退職|退職後|を?退官|を?除隊"
+    r"|経験あり|経験[0-9一二三四五六七八九十]+年|に入庁|入庁)(?!者)"
+    rf"|{_PUBLIC_PAST_NAME}(?:より|から)(?:の)?出向"
+)
+# 機関名・職名のすぐ前後に、仕事の対象であることを示す語がある形。
+_PUBLIC_OBJECT_AFTER = re.compile(
+    r"^[^\s()、,/／]{0,12}?(?:向け|向|担当|営業|顧客|案件|支援|領域|対応|提案|コンサル|入札|セールス"
+    r"|納入|納品|プロジェクト|pj|pm|業界|市場|マーケット|分野|試験|予備校|講座|講師|対策|受験|専門|研修"
+    r"|教育|募集|広告|saas|sales|account|出向|派遣|常駐|受託|委託|請負|共済|保険|ローン|との|連携|協働"
+    r"|共同|折衝|渉外|窓口|関連|取引|システム|開発|更改|調達|発注|工事|新築|申請|申告|届出|出願|手続"
+    r"|登記|提出|求人|掲載|転職|宿舎|サポート|製品|艦艇|車両|機の|事業部|事業本部|本部|ソリューション"
+    r"|ビジネス|推進|dx|部門|ユニット|セクター|公共|労務|管理|代行|計算|運用|秘書)"
+)
+_PUBLIC_OBJECT_PAREN = re.compile(r"^\s*\([^()]*(?:派遣|委託|常駐|請負|受託|出向|向け|担当)")
+_PUBLIC_OBJECT_BEFORE = re.compile(r"(?:顧客|客先|発注者?|委託元|取引先|担当|派遣先|出向先|常駐先|派遣)\s*[:：]?\s*$")
+_PUBLIC_MENTION_RE = re.compile(rf"{_PUBLIC_BODY}|{_PUBLIC_ROLE}|{_PUBLIC_GENERIC}")
+
+
+def _is_object(text: str, start: int, end: int) -> bool:
+    """text[start:end] の機関名・職名が、仕事の対象（顧客・担当先・派遣先）として書かれているか。"""
+    after = text[end:]
+    return bool(_PUBLIC_OBJECT_AFTER.match(after) or _PUBLIC_OBJECT_PAREN.match(after)
+                or _PUBLIC_OBJECT_BEFORE.search(text[:start]))
+
+
+def _public_past(t: str) -> bool:
+    """役職欄に本人の公務員の経歴が書かれているか。"""
+    if any(not _is_object(t, m.start(), m.end()) for m in _PAST_PREFIX_RE.finditer(t)):
+        return True
+    return bool(_PAST_SUFFIX_RE.search(t))
+
+
+def _public_mention(text: str) -> bool:
+    """text に公的機関名・公務員の職名が、仕事の対象としてではなく出ているか。"""
+    head = text.split()[0] if text.split() else ""
+    if _PUBLIC_PLACE_RE.match(head):
+        return True   # 「横浜市 健康福祉局 主事」
+    return any(not _is_object(text, m.start(), m.end()) for m in _PUBLIC_MENTION_RE.finditer(text))
+
+
+def _name_is_public(name: str) -> bool:
+    """出向元・派遣元として書かれた名前が公的機関か。"""
+    return bool(_PUBLIC_START_RE.match(name) or _PUBLIC_BODY_RE.search(name)
+                or _PUBLIC_PLACE_RE.match(name) or _PUBLIC_GENERIC_RE.match(name)) \
+        and not _LEGAL_ENTITY_RE.search(name)
+
+
+def _secondment(text: str) -> str | None:
+    """出向・派遣・委託などの付記から雇い主を読む。'public' / 'private' / None（付記なし・元の組織のまま）。"""
+    for m in _FROM_SECONDMENT_RE.finditer(text):
+        return "public" if _name_is_public(m.group(1) or m.group(2)) else "private"
+    if _TO_SECONDMENT_RE.search(text):
+        return None
+    return "private" if _PRIVATE_STATUS_RE.search(text) else None
+
+
+def _company_is_public(c: str) -> bool:
+    """会社名欄が公的機関か。c は正規化済み。"""
+    body, parens = _split_paren(c)
+    body = body.strip()
+    head = next(iter(re.split(r"[\s/／、,・]+", body)), "")
+    if _PUBLIC_UNION_RE.search(head) or _PUBLIC_START_RE.match(head):
+        return True   # 「文部科学省 国立大学法人支援課」「金融庁 監督局銀行第一課」
+    # 「社会保険庁（現 日本年金機構）」の今の名前や、兼務・派遣先の付記は法人格の判定に使わない。
+    notes = [p for p in parens
+             if not re.match(r"\s*(?:現|旧|現在の)", p) and not _TO_SECONDMENT_RE.search(p)]
+    if _LEGAL_ENTITY_RE.search(body) or any(_LEGAL_ENTITY_RE.search(p) for p in notes):
+        return False
+    if _PRIVATE_HEAD_RE.search(head):
+        return False
+    hidden = bool(_HIDDEN_COMPANY_RE.match(body)) and not any(_PRIVATE_NOTE_RE.search(p) for p in parens)
+    if _PUBLIC_GENERIC_RE.match(body) or (hidden and any(_PUBLIC_GENERIC_RE.match(p.strip()) for p in parens)):
+        return True
+    if (_PUBLIC_PLACE_RE.match(head) or _PUBLIC_BODY_RE.search(head)
+            or re.fullmatch(r"(?:[^\s()]{0,8}?(?:都|道|府|県|市|区|町|村))?立", head)):
+        return True
+    for p in parens:
+        p = p.strip()
+        if (_FACILITY_HEAD_RE.search(head) and re.fullmatch(
+                r"[^\s()]{0,8}?(?:都|道|府|県|市|区|町|村)立|公立", p)):
+            return True   # 「希望ヶ丘高等学校（県立）」「みなと中学校（横浜市立）」
+        if _PUBLIC_BODY_RE.search(p) and (hidden or (_ORG_UNIT_HEAD_RE.search(head)
+                                                      and not _PRIVATE_HEAD_RE.search(head))):
+            return True   # 「第1空挺団（陸上自衛隊）」「非公開（市役所）」
+    return bool(_PUBLIC_EN_RE.search(c))
+
+
+def is_public_sector(company: str, title: str = "") -> bool:
+    """その職歴が公務員（官公庁・自治体・警察・消防・自衛隊・公立学校/病院など）か。
+
+    役職欄（社内経歴の部署名を含む）は、本人の経歴の付記・公務員にしか無い職と、勤務先を伏せた人の
+    機関名・職名だけを見る。民間の会社名に続く役職欄の機関名は顧客・発注者・担当先として頻出するため数えない。
+    """
+    c, t = _norm(company), _norm(title)
+    if _public_past(t):
+        return True
+    status = _secondment(t) or _secondment(c)
+    if status is not None:
+        return status == "public" and (_company_is_public(c) or _name_is_public(c))
+    legal = bool(_LEGAL_ENTITY_RE.search(_split_paren(c)[0]))
+    if not legal and any(not _is_object(t, m.start(), m.end()) for m in _PUBLIC_OFFICE_RE.finditer(t)):
+        return True
+    if not legal and re.search(r"(?:衆議院|参議院|国会)議員", c) and re.search(r"第[一二12]秘書", t):
+        return True   # 国会議員事務所の第一・第二秘書は公設秘書
+    if _company_is_public(c):
+        return True
+    body, parens = _split_paren(c)
+    if _HIDDEN_COMPANY_RE.match(body.strip()) and not any(_PRIVATE_NOTE_RE.search(p) for p in parens):
+        return _public_mention(t)
+    return False
+
+
+def has_public_sector_career(candidate: Candidate) -> bool:
+    """キャリアの中に公務員の職歴があるか（社内経歴の役職・部署名も見る）。"""
+    for e in candidate.employments:
+        if is_public_sector(e.company, e.title):
+            return True
+        if any(is_public_sector(e.company, s.name) for s in e.segments):
+            return True
+    if candidate.employments:
+        return False
+    # 職歴が取れない取り込み経路では、現職と過去の会社名で判定する。
+    jobs = [(candidate.current_company, candidate.current_title),
+            *[(n, "") for n in candidate.prior_companies]]
+    return any(is_public_sector(c, t) for c, t in jobs if c or t)
