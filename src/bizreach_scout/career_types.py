@@ -474,3 +474,115 @@ def factory_ratio(candidate: Candidate) -> float | None:
         is_factory_role,
     )
     return hit / total if total > 0 else None
+
+
+# --- 4. 公務員 ------------------------------------------------------------------
+# 運用者指示（2026-11）: キャリアの中に公務員がある人は対象外（期間・現職か過去かを問わない）。
+# 公務員 = 国・地方公共団体に任用される職員（中央省庁・出先機関・裁判所・国会、都道府県庁・
+# 市区町村役所/役場・議会・教育委員会・公営企業、警察・消防・自衛隊、公立の学校/病院/保育所）。
+# 独立行政法人・国立大学法人・地方独立行政法人・特殊法人・公益法人・民営化した会社
+# （日本郵便・JR・NTT など）は法人で、職員は公務員ではないため数えない（会社名に法人格が入る）。
+# 役職欄の「防衛省向け営業」「市役所担当」「公務員試験講師」のような仕事の対象は数えない。
+
+# 中央省庁（再編前の旧省庁名を含む）。
+_MINISTRY = (
+    r"内閣府|内閣官房|内閣法制局|総務省|法務省|外務省|財務省|文部科学省|厚生労働省|農林水産省"
+    r"|経済産業省|国土交通省|環境省|防衛省|復興庁|デジタル庁|宮内庁|警察庁|金融庁|消費者庁"
+    r"|こども家庭庁|国税庁|特許庁|気象庁|海上保安庁|観光庁|林野庁|水産庁|資源エネルギー庁|中小企業庁"
+    r"|文化庁|スポーツ庁|消防庁|公安調査庁|出入国在留管理庁|防衛装備庁|会計検査院|人事院"
+    r"|(?:公正取引|個人情報保護|原子力規制|国家公安|運輸安全)委員会"
+    r"|大蔵省|通商産業省|郵政省|建設省|運輸省|厚生省|労働省|文部省|自治省|農林省|総理府|総務庁"
+    r"|防衛庁|環境庁|経済企画庁|科学技術庁|国土庁|北海道開発庁|沖縄開発庁"
+)
+# 公的機関の名前（会社名欄・役職欄のどこに出ても機関名と分かるもの）。
+_PUBLIC_BODY_RE = re.compile(
+    rf"{_MINISTRY}"
+    r"|(?:都|道|府|県)庁|(?:市|区)役所|役場|議会事務局|教育委員会|選挙管理委員会|人事委員会"
+    r"|水道局|下水道局|交通局|病院局|企業局|消防(?:局|本部|署)|一部事務組合|広域連合"
+    r"|警察(?:署|本部)|(?:都|道|府|県)警察|県警|府警|道警|警視庁|交番"
+    r"|(?:衆|参)議院(?!議員)|国立国会図書館|裁判所|検察庁|法務局|税関|国税局|税務署|労働局"
+    r"|労働基準監督署|ハローワーク|公共職業安定所|地方整備局|運輸局|財務局|経済産業局|農政局"
+    r"|森林管理局|地方環境事務所|航空局|開発局|刑務所|拘置所|少年院|少年鑑別所|入国管理局"
+    r"|出入国在留管理局|海上保安(?:部|署|本部)|気象台|自衛隊|防衛局|防衛大学校|防衛医科大学校"
+    r"|地方協力本部|日本国(?:大使館|総領事館|領事館|政府代表部)|保健所|保健センター"
+    r"|(?:都|道|府|県|市|区|町|村)立[^\s()]{0,12}?(?:小学校|中学校|高等学校|高校|中等教育学校"
+    r"|特別支援学校|養護学校|学校|病院|図書館|博物館|美術館|保育所|保育園|幼稚園)"
+    r"|公立(?:学校|小学校|中学校|高等学校|高校|病院|保育所|保育園)"
+)
+# 公務員の職名（会社名を書かない・伏せた人の役職欄にも出る）。
+_PUBLIC_ROLE_RE = re.compile(
+    r"(?:地方|国家)?公務員|自衛官|警察官|巡査(?:部長|長)?|警部(?:補)?|消防(?:士|吏員|官|職員)"
+    r"|刑務官|入国審査官|国税専門官|税務職員|労働基準監督官|海上保安官|書記官|事務官|技官|外交官"
+    r"|(?:(?:市|区)役所|役場|(?:都|道|府|県)庁)職員|(?:市|区|町|村|県|都|府|(?<!鉄)道)職員|行政職員?"
+)
+# 公的機関・公務員の語のすぐ後に、仕事の対象であることを示す語が続く形。
+_PUBLIC_OBJECT_AFTER = re.compile(
+    r"^[^\s()、,/／]{0,8}?(?:向け|向|担当|営業|顧客|案件|支援|領域|対応|提案|コンサル|入札|セールス"
+    r"|納入|プロジェクト|pj|業界|市場|分野|試験|予備校|講座|講師|対策|受験|専門|学校|研修|教育|募集"
+    r"|広告|saas|sales|account|出向|派遣|常駐|受託|委託|共済|保険|ローン|との|連携|協働|共同|折衝"
+    r"|渉外|窓口|関連|取引)"
+)
+# 法人格はあるが公的機関（一部事務組合・広域連合・企業団の職員は地方公務員）。
+_PUBLIC_UNION_RE = re.compile(
+    r"(?:消防|一部事務|広域行政|衛生施設|清掃施設|環境施設|水道)組合|広域連合|企業団"
+)
+# 会社名欄が自治体名そのもの（「横浜市」「神奈川県」「世田谷区」「横浜市中区」）。
+_PUBLIC_PLACE_RE = re.compile(
+    r"^(?:北海道|東京都|京都府|大阪府|[一-龥]{2,3}県|[一-龥ぁ-ゖァ-ヶ]{1,5}市(?:[一-龥]{1,3}区)?"
+    r"|[一-龥]{1,4}区)(?:役所|庁|役場)?$"
+)
+# 会社名欄が公的機関を伏せた書き方（「官公庁」「地方自治体」「某省庁」）。
+_PUBLIC_GENERIC_RE = re.compile(
+    r"^(?:某|大手|地方の?)?(?:官公庁|中央省庁|省庁|地方自治体|自治体|地方公共団体|政府機関|国の機関"
+    r"|行政機関|(?:地方|国家)?公務員)$"
+)
+# 民間の職歴の役職欄・会社名の付記に書かれた公務員の経歴（「元自衛官」「自衛隊出身」「前職：市役所」）。
+_PUBLIC_PAST_RE = re.compile(
+    r"(?:元|前職\s*[:：]?\s*)(?:[^\s()]{0,8}?)(?:自衛隊|警察|消防|市役所|区役所|役場|県庁|都庁|省庁"
+    r"|官公庁|自治体|公務員)"
+    r"|(?:自衛隊|警察|消防|市役所|区役所|役場|県庁|都庁|省庁|官公庁|自治体|公務員)"
+    r"(?:出身|ob|og|経験者?|を?退職|から転職)"
+)
+
+
+def _public_mention(text: str, *, roles_only: bool) -> bool:
+    """text に公的機関・公務員の職名が、仕事の対象としてではなく出ているか。"""
+    if _PUBLIC_PAST_RE.search(text):
+        return True
+    for rx in (_PUBLIC_ROLE_RE,) if roles_only else (_PUBLIC_ROLE_RE, _PUBLIC_BODY_RE):
+        if any(not _PUBLIC_OBJECT_AFTER.match(text[m.end():]) for m in rx.finditer(text)):
+            return True
+    return False
+
+
+def is_public_sector(company: str, title: str = "") -> bool:
+    """その職歴が公務員（官公庁・自治体・警察・消防・自衛隊・公立学校/病院など）か。
+
+    会社名欄に法人格がある職歴（民間企業・独立行政法人・国立大学法人など）は、役職欄の
+    公務員の職名と「元自衛官」のような経歴の付記だけを見る（機関名は顧客・担当先として頻出する）。
+    """
+    c, t = _norm(company), _norm(title)
+    corporate = bool(_CORPORATE_RE.search(_split_paren(c)[0])) and not _PUBLIC_UNION_RE.search(c)
+    if corporate:
+        return _public_mention(t, roles_only=True) or bool(_PUBLIC_PAST_RE.search(c))
+    tokens = _company_tokens(company)
+    head = tokens[0] if tokens else ""
+    if _PUBLIC_PLACE_RE.match(head) or _PUBLIC_GENERIC_RE.match(head):
+        return True
+    return (_public_mention(c, roles_only=False) or bool(_PUBLIC_UNION_RE.search(c))
+            or _public_mention(t, roles_only=False))
+
+
+def has_public_sector_career(candidate: Candidate) -> bool:
+    """キャリアの中に公務員の職歴があるか（社内経歴の役職・部署名も見る）。"""
+    for e in candidate.employments:
+        if is_public_sector(e.company, e.title):
+            return True
+        if any(is_public_sector(e.company, s.name) for s in e.segments):
+            return True
+    if candidate.employments:
+        return False
+    # 職歴が取れない取り込み経路では、現職と過去の会社名で判定する。
+    jobs = [(candidate.current_company, candidate.current_title),
+            *[(n, "") for n in candidate.prior_companies]]
+    return any(is_public_sector(c, t) for c, t in jobs if c or t)
