@@ -23,6 +23,15 @@ from .validators import validate_scout
 _USER_INSTRUCTION = (
     "上記の候補者について、初回送信用と再送用のスカウト2通を emit_scout ツールで出力してください。"
 )
+# ツールを呼ばずに終わったときの取り直しで system に足す指示。Sonnet 5.5 / Opus 5.5 では
+# 強制 tool_choice（tool/any）が400になるため、auto のまま指示で emit_scout を呼ばせる。
+_TOOL_REMINDER = (
+    "出力は必ず emit_scout ツールを1回呼び出して返してください。"
+    "本文をテキストとして書いたり、ツールを呼ばずに終えたりしないでください。"
+)
+# 拒否（stop_reason=refusal）時のサーバー側フォールバック（beta）。Claude API で使えるモデルだけ。
+_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_FALLBACK_MODELS = frozenset({"claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1"})
 
 # emit_scout が必ず返すべきフィールド（欠落は生成失敗として扱う）。
 _REQUIRED_FIELDS = (
@@ -74,27 +83,36 @@ class ScoutGenerator:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
     def _call(self, system: str, messages: list[dict], force_tool: bool = False):
+        # 強制 tool_choice（tool/any）は Sonnet 5.5 / Opus 5.5 で400になるため常に auto にし、
+        # ツールを呼ばずに終わったときの取り直し（force_tool）では system に指示を足す。
         kwargs: dict = {
             "model": self._model,
             "max_tokens": self._settings.max_tokens,
-            "system": system,
+            "system": f"{system}\n\n{_TOOL_REMINDER}" if force_tool else system,
             "messages": messages,
             "tools": [EMIT_SCOUT_TOOL],
+            "tool_choice": {"type": "auto"},
         }
         budget = self._settings.thinking_budget_tokens
-        if budget and budget > 0 and not force_tool:
-            # 拡張思考(adaptive thinking)を有効化。
-            # 注: Opus 4.8/4.7 では {"type":"enabled","budget_tokens":N} は廃止され400に
-            #     なるため adaptive を使い、深さは output_config.effort で制御する。
-            #     また拡張思考時は強制 tool_choice(tool/any) が使えないため auto にする。
+        if budget and budget > 0:
+            # 拡張思考(adaptive thinking)を有効化。budget_tokens 形式は近年のモデルで400に
+            # なるため adaptive を使い、深さは output_config.effort で制御する。
             kwargs["thinking"] = {"type": "adaptive"}
             if self._settings.thinking_effort:
                 kwargs["output_config"] = {"effort": self._settings.thinking_effort}
-            kwargs["tool_choice"] = {"type": "auto"}
-        else:
-            # 思考オフ（またはフォールバック時）は強制tool_choiceで確実に構造化出力を得る。
-            kwargs["tool_choice"] = {"type": "tool", "name": "emit_scout"}
+        if self._model in _FALLBACK_MODELS:
+            # 安全分類器の誤判定で断られたとき、同じ呼び出しの中で別モデルに引き継がせる。
+            return self.client.beta.messages.create(
+                **kwargs, betas=[_FALLBACK_BETA], fallbacks="default")
         return self.client.messages.create(**kwargs)
+
+    @staticmethod
+    def _raise_if_refused(resp) -> None:
+        """モデルに断られた応答（stop_reason=refusal）は理由つきで生成失敗にする。"""
+        if getattr(resp, "stop_reason", None) == "refusal":
+            details = getattr(resp, "stop_details", None)
+            category = getattr(details, "category", None) or "不明"
+            raise GenerationError(f"モデルが文面の生成を断りました（分類: {category}）。")
 
     @staticmethod
     def _extract_tool_input(resp) -> tuple[dict, object]:
@@ -107,16 +125,18 @@ class ScoutGenerator:
         """emit_scoutツールの出力を確実に得る。
 
         adaptive thinking + tool_choice=auto では稀にツールを呼ばず終わることがある。
-        その場合は思考なし＋強制tool_choiceで1回だけ取り直す。バリデーション再試行時の
+        その場合は emit_scout を呼ぶよう system に指示を足して1回だけ取り直す。バリデーション再試行時の
         2回目呼び出しでも同じ揺れが起こり得るため、呼び出し箇所を問わずこのヘルパーを
         通すことで常に安全側フォールバックを効かせる。
         """
         resp = self._call(system, messages)
+        self._raise_if_refused(resp)
         try:
             data, tool_block = self._extract_tool_input(resp)
         except RuntimeError:
-            logger.warning("拡張思考でツール未出力。強制tool_choiceで再試行します。")
+            logger.warning("emit_scout ツールの出力が無かったため、ツールを呼ぶよう指示して再試行します。")
             resp = self._call(system, messages, force_tool=True)
+            self._raise_if_refused(resp)
             data, tool_block = self._extract_tool_input(resp)
         return resp, data, tool_block
 
@@ -139,6 +159,12 @@ class ScoutGenerator:
         messages: list[dict] = [{"role": "user", "content": _USER_INSTRUCTION}]
 
         resp, data, tool_block = self._call_ensuring_tool(system, messages)
+        missing = self._missing_fields(data)
+        if missing:
+            # 一部の項目だけ書いて emit_scout を呼ぶことがある（2026-11 Sonnet 5.5 の本番で発生）。
+            # 生成失敗にする前に、空の項目を伝えて1回だけ書き直させる。
+            resp, data, tool_block = self._retry_missing_fields(
+                system, messages, resp, tool_block, missing)
 
         scout = self._assemble(
             candidate, data, matches, intro_matches, resend_intro_matches, tone_key, company, rules
@@ -257,6 +283,26 @@ class ScoutGenerator:
             logger.warning("修正後も指摘が残りました。生成結果を採用します。")
         return scout2
 
+    @staticmethod
+    def _missing_fields(data: dict) -> list[str]:
+        return [k for k in _REQUIRED_FIELDS if not str(data.get(k, "")).strip()]
+
+    def _retry_missing_fields(self, system: str, messages: list[dict], resp, tool_block,
+                              missing: list[str]):
+        """必須項目が空の emit_scout 出力を、空の項目を伝えて1回だけ書き直させる。"""
+        logger.warning("emit_scout の必須項目が空のため書き直しを依頼します: %s", "、".join(missing))
+        messages.append({"role": "assistant", "content": resp.content})
+        messages.append({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_block.id,
+                "content": ("次の項目が空または欠落しています: " + "、".join(missing)
+                            + "\nすべての項目を埋めて、再度 emit_scout を呼び出してください。"),
+            }],
+        })
+        return self._call_ensuring_tool(system, messages)
+
     def _assemble(
         self,
         candidate: Candidate,
@@ -268,7 +314,7 @@ class ScoutGenerator:
         company: dict,
         rules: dict,
     ) -> GeneratedScout:
-        missing = [k for k in _REQUIRED_FIELDS if not str(data.get(k, "")).strip()]
+        missing = self._missing_fields(data)
         if missing:
             raise GenerationError(
                 "emit_scout の必須フィールドが欠落/空です: " + "、".join(missing)

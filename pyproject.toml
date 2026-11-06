@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = { text = "Proprietary" }
 authors = [{ name = "経営戦略研究所株式会社" }]
 dependencies = [
-    "anthropic>=0.40.0",
+    "anthropic>=1.15.0",  # fallbacks="default"（拒否時のサーバー側フォールバック）に対応する版
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "PyYAML>=6.0",

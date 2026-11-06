@@ -15,18 +15,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import ConsultantProfile
 
-# Opus を使うときは最新の Opus を使う、という運用方針。GitHub の Variables などに
-# 旧 Opus のモデル名が残っていても方針が守られるよう、Opus 系の指定は最新へ
-# 読み替える（sonnet / haiku 等の指定はコスト選択なのでそのまま尊重する）。
-# 新しい Opus が出たらこの定数だけを更新すれば、既定値・読み替え・doctor の表示が揃う。
-OPUS_MODEL = "claude-opus-5-5"
+# 文面生成のモデル（2026-11 運用者指示で Opus 5.5 → Sonnet 5.5）。GitHub の Variables などに
+# 以前のモデル名（Opus 系・旧 Sonnet）が残っていても方針が守られるよう、Opus 系・Sonnet 系の
+# 指定はこの値へ読み替える（haiku 等の指定はそのまま尊重する）。
+# モデルを変えるときはこの定数だけを更新すれば、既定値・読み替え・doctor の表示が揃う。
+GENERATION_MODEL = "claude-sonnet-5-5"
 
 
 def normalize_model(model: str) -> str:
-    """Opus 系のモデル指定を最新の Opus（OPUS_MODEL）に揃える。それ以外はそのまま返す。"""
+    """Opus 系・Sonnet 系のモデル指定を生成モデル（GENERATION_MODEL）に揃える。それ以外はそのまま返す。"""
     m = (model or "").strip()
-    if m.startswith("claude-opus-") and m != OPUS_MODEL:
-        return OPUS_MODEL
+    if m.startswith(("claude-opus-", "claude-sonnet-")) and m != GENERATION_MODEL:
+        return GENERATION_MODEL
     return m
 
 
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BIZSCOUT_", extra="ignore")
 
     # Anthropic（API キーは ANTHROPIC_API_KEY を直接参照）
-    model: str = OPUS_MODEL
+    model: str = GENERATION_MODEL
     max_tokens: int = 16000
     # 拡張思考(extended thinking)の有効化フラグ。>0 で有効、0 でオフ。
     # 注: 近年の Opus では {"type":"enabled","budget_tokens":N} は廃止され400になるため、
@@ -57,7 +57,10 @@ class Settings(BaseSettings):
     #     この値は「思考トークン数」ではなく単なる ON/OFF フラグとして扱う。
     thinking_budget_tokens: int = 8000
     # 思考の深さ/全体のトークン量: low | medium | high | xhigh | max（adaptive時に使用）。
-    thinking_effort: str = "medium"
+    # Sonnet 5.5 は medium だと本番で項目の書き漏れが続いた（2026-11-02: 5名中4名で
+    # 紹介文・本文の欠落。Opus 5.5 の medium は 10/30・11/01 の12名で0件）。Sonnet 5.5 の
+    # 既定でもある high を明示して送る。
+    thinking_effort: str = "high"
 
     # 送信制御
     dry_run: bool = True
@@ -89,8 +92,8 @@ class Settings(BaseSettings):
 
     @field_validator("model")
     @classmethod
-    def _opus_means_opus_5(cls, v: str) -> str:
-        """Opus を使う指定なら Opus 5 に揃える（旧 Opus の指定が残っていても方針を守る）。"""
+    def _use_generation_model(cls, v: str) -> str:
+        """Opus 系・Sonnet 系の指定は生成モデルに揃える（以前のモデル名が残っていても方針を守る）。"""
         return normalize_model(v)
 
     # ブラウザ（bot検知対策で実ブラウザのUAに寄せる）
